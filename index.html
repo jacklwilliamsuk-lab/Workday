@@ -146,7 +146,7 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
   <div class="mapmsg" id="mapMsg" hidden></div>
   <div class="timebar" id="timebar">
     <button id="playBtn" aria-label="Play weather timeline">▶</button>
-    <input type="range" id="slider" min="0" max="15" value="6" aria-label="Weather time">
+    <input type="range" id="slider" min="0" max="15" value="3" aria-label="Weather time">
     <span class="t num" id="sliderLabel">Now</span>
   </div>
 </div>
@@ -160,7 +160,7 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
   </section>
 
   <section id="wxPanel">
-    <h2>Weather here · last 6 h and next 9 h</h2>
+    <h2>Weather here · last 3 h and next 12 h</h2>
     <div class="wx-now">
       <span class="big num" id="wxTemp">–°</span>
       <span id="wxRain" class="num">– mm rain this hour</span>
@@ -444,7 +444,7 @@ async function refreshVehicles(){
 }
 
 /* ---------- weather (Open-Meteo, grid over the visible map) ---------- */
-let wx = null, wxIdx = 6, playTimer = null;
+let wx = null, wxIdx = 3, playTimer = null;
 const slider = document.getElementById("slider"), sliderLabel = document.getElementById("sliderLabel");
 
 async function loadWeather(){
@@ -458,7 +458,7 @@ async function loadWeather(){
   }
   const here = me || map.getCenter();
   lats.push(here.lat.toFixed(2)); lngs.push(here.lng.toFixed(2)); // your spot, rounded to ~1 km for privacy
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=temperature_2m,precipitation,weather_code,is_day&past_hours=6&forecast_hours=9&timezone=Europe%2FLondon`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=temperature_2m,precipitation,weather_code,is_day&past_hours=3&forecast_hours=12&timezone=Europe%2FLondon`;
   try {
     const r = await fetch(url); let d = await r.json(); if (!Array.isArray(d)) d = [d];
     const times = d[0].hourly.time;
@@ -519,7 +519,7 @@ function drawWxChart(){
   [0, wx.nowIdx, n-1].forEach(k => s += `<text x="${L0+cw*(k+.5)}" y="${H-6}" text-anchor="middle">${k===wx.nowIdx?"Now":wx.times[k].slice(11,16)}</text>`);
   svg.innerHTML = s;
   document.getElementById("wxTemp").textContent = `${Math.round(h.t[wx.nowIdx])}°C`;
-  document.getElementById("wxRain").textContent = `${h.p[wx.nowIdx].toFixed(1)} mm rain this hour · ${h.p.slice(wx.nowIdx+1).reduce((a,b)=>a+b,0).toFixed(1)} mm due in next 9 h`;
+  document.getElementById("wxRain").textContent = `${h.p[wx.nowIdx].toFixed(1)} mm rain this hour · ${h.p.slice(wx.nowIdx+1).reduce((a,b)=>a+b,0).toFixed(1)} mm due in next 12 h`;
 }
 slider.oninput = () => { wxIdx = +slider.value; drawWeather(); drawIsobars(); };
 document.getElementById("playBtn").onclick = e => {
@@ -559,7 +559,7 @@ async function loadSynoptic(){
   const ny = (SYN.lat1-SYN.lat0)/SYN.step+1, nx = (SYN.lng1-SYN.lng0)/SYN.step+1;
   for (let j=0;j<ny;j++) for (let i=0;i<nx;i++) { lats.push(SYN.lat0+j*SYN.step); lngs.push(SYN.lng0+i*SYN.step); }
   try {
-    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=pressure_msl&past_hours=6&forecast_hours=9&timezone=Europe%2FLondon`);
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=pressure_msl&past_hours=3&forecast_hours=12&timezone=Europe%2FLondon`);
     const d = await r.json();
     syn = { nx, ny, times: d[0].hourly.time, p: d.map(x => x.hourly.pressure_msl) };
     mapMsg("iso", null);
@@ -586,7 +586,7 @@ function drawIsobars(){
   if (!syn || !map.hasLayer(layers.iso)) return;
   // match the slider's hour
   const key = wx ? wx.times[wxIdx] : null;
-  let t = key ? syn.times.indexOf(key) : -1; if (t < 0) t = Math.min(syn.times.length-1, 6);
+  let t = key ? syn.times.indexOf(key) : -1; if (t < 0) t = Math.min(syn.times.length-1, 3);
   const { g, NX, NY, F } = synGrid(t), st = SYN.step/F;
   const ll = (I,J) => [SYN.lat0 + J*st, SYN.lng0 + I*st];
   let lo = Infinity, hi = -Infinity; for (const r of g) for (const x of r){ if (x<lo) lo=x; if (x>hi) hi=x; }

@@ -54,7 +54,7 @@ Note: the Y6 starts from Rupert Street / the bus station, so it may not appear a
 
 ## Weather
 
-The map overlay is a 5×5 grid of Open-Meteo forecasts covering whatever area the map shows, so the overlay and the chart use the same data. Slider: −6 h to +9 h. Rain chip = rainfall shading; Temperature chip = colour + °C labels.
+The map overlay is a 5×5 grid of Open-Meteo forecasts covering whatever area the map shows, so the overlay and the chart use the same data. Slider: −3 h to +12 h. Rain chip = rainfall shading; Weather chip = symbols, colour and °C labels; Isobars chip = pressure lines and H/L centres.
 
 ## Later: Google Health
 
