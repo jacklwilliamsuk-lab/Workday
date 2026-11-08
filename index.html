@@ -119,6 +119,12 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
 .board li.pick:hover,.board li.pick:focus-visible{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .board li.on{background:color-mix(in srgb,var(--accent) 20%,transparent)}
 .bus-pin{background:var(--harbour);color:#fff;font:700 13px/1 var(--display);padding:4px 6px;border-radius:6px;border:2px solid #fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.sat-tiles{filter:brightness(.72) saturate(.8) contrast(1.05)}
+.wx-canvas{pointer-events:none}
+.tl{display:flex;align-items:center;gap:0;font:600 13px/1 var(--display);white-space:nowrap;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
+.tl i{width:7px;height:7px;background:#fff;margin-right:4px;flex:none}
+.tl b{background:#fff;color:#111;font-weight:700;font-size:15px;padding:3px 6px;min-width:26px;text-align:center}
+.tl span{background:rgba(14,26,52,.82);color:#fff;padding:4px 6px;font-weight:500}
 .temp-pin{font:700 14px/1 var(--display);color:#111;text-shadow:0 0 3px #fff,0 0 3px #fff;white-space:nowrap;display:flex;align-items:center;gap:2px}
 .temp-pin .sym{font-size:20px;line-height:1;text-shadow:none}
 .isobar-lbl{font:600 11px/1 var(--display);color:#3a3f8f;background:rgba(255,255,255,.85);padding:1px 3px;border-radius:3px;white-space:nowrap}
@@ -143,8 +149,8 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
   <div class="chips">
     <button class="chip" id="chipBus" aria-pressed="true">Buses</button>
     <button class="chip" id="chipRain" aria-pressed="true">Rain</button>
-    <button class="chip" id="chipTemp" aria-pressed="true">Weather</button>
-    <button class="chip" id="chipIso" aria-pressed="false">Isobars</button>
+    <button class="chip" id="chipTemp" aria-pressed="true">Temps</button>
+    <button class="chip" id="chipIso" aria-pressed="false">Isobars &amp; fronts</button>
     <button class="chip" id="chipMe" aria-pressed="false">Centre on me</button>
     <button class="chip" id="chipClear" aria-pressed="true" hidden>Hide route ×</button>
   </div>
@@ -171,8 +177,8 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
       <span id="wxRain" class="num">– mm rain this hour</span>
     </div>
     <svg class="chart" id="wxChart" viewBox="0 0 360 140" role="img" aria-label="Rain and temperature chart"></svg>
-    <p class="note">Bars: rain (mm per hour). Line: temperature. The map overlay uses the same data across the area you're looking at.</p>
-    <p class="note wxlinks">Isobars (every 4 hPa) and H/L pressure centres: tap <b>Isobars</b> on the map. Warm and cold fronts: <a href="https://www.metoffice.gov.uk/weather/maps-and-charts/surface-pressure" target="_blank" rel="noopener">Met Office fronts chart</a>.</p>
+    <p class="note">Solid bars: rain that fell. Pale bars: predicted rain (mm per hour), with the chance of rain above. Red line: temperature.</p>
+    <p class="note wxlinks">Tap <b>Isobars &amp; fronts</b> to see the pressure chart: white isobars every 4 hPa, highs and lows, and fronts (blue triangles cold, red semicircles warm). The fronts are worked out automatically from forecast temperatures and winds, so they can differ from the <a href="https://www.metoffice.gov.uk/weather/maps-and-charts/surface-pressure" target="_blank" rel="noopener">Met Office's hand-drawn chart</a>.</p>
   </section>
 
   <section id="workPanel">
@@ -259,10 +265,16 @@ let weekGoal = store.get("goal", 37.5);
 
 /* ---------- map ---------- */
 const map = L.map("map", { zoomControl:false, attributionControl:true }).setView([51.47, -2.60], 13);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom:19, attribution:'© OpenStreetMap · weather Open-Meteo · buses Bus Open Data Service / bustimes.org'
-}).addTo(map);
-const layers = { wx: L.layerGroup().addTo(map), temp: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map), iso: L.layerGroup(), route: L.layerGroup().addTo(map) };
+// Street map when zoomed in; dark satellite view (weather-chart style) when zoomed out to the UK
+const streets = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19, attribution:"© OpenStreetMap" });
+const satellite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom:19, className:"sat-tiles", attribution:"Imagery © Esri, Maxar, Earthstar Geographics" });
+map.attributionControl.addAttribution("Weather Open-Meteo · buses Bus Open Data Service / bustimes.org · routes OpenStreetMap");
+function pickBase(){ const dark = map.getZoom() <= 8;
+  if (dark && !map.hasLayer(satellite)) { map.removeLayer(streets); satellite.addTo(map); }
+  if (!dark && !map.hasLayer(streets)) { map.removeLayer(satellite); streets.addTo(map); } }
+map.on("zoomend", pickBase); pickBase();
+const layers = { temp: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map), route: L.layerGroup().addTo(map) };
 let meMarker = null, me = null, activeKey = null;
 const msgs = {};
 function mapMsg(key, text){ if (text) msgs[key] = text; else delete msgs[key];
@@ -546,186 +558,373 @@ async function drawRoute(service, dir, fitToRoute){
   } catch { mapMsg("route", `Couldn't load the ${service} route`); }
 }
 
-/* ---------- weather (Open-Meteo, grid over the visible map) ---------- */
-let wx = null, wxIdx = 3, playTimer = null;
+/* ---------- weather ----------
+   All from Open-Meteo, 3 h back to 12 h ahead:
+   - local: a 6x6 grid over the map view (rain detail when zoomed in) + your spot (the chart)
+   - wide:  a 2° grid over the North Atlantic and Europe (isobars, estimated fronts, rain when zoomed out)
+   - places: temperatures for Bristol areas (zoomed in) and UK cities (zoomed out) */
+let wx = null, wxIdx = 3, playTimer = null, syn = null, placeT = null, wxFirst = true;
+const show = { rain: true, temps: true, iso: false };
 const slider = document.getElementById("slider"), sliderLabel = document.getElementById("sliderLabel");
+const OM = "https://api.open-meteo.com/v1/forecast", WINDOW = "past_hours=3&forecast_hours=12&timezone=Europe%2FLondon";
+const nowKey = () => new Date().toLocaleString("sv-SE", { timeZone: "Europe/London" }).slice(0, 13).replace(" ", "T");
 
+async function om(lats, lngs, vars){
+  const jobs = [];
+  for (let k = 0; k < lats.length; k += 150)
+    jobs.push(fetch(`${OM}?latitude=${lats.slice(k, k+150).join(",")}&longitude=${lngs.slice(k, k+150).join(",")}&hourly=${vars}&${WINDOW}`)
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(d => Array.isArray(d) ? d : [d]));
+  return (await Promise.all(jobs)).flat();
+}
+const curTime = () => wx ? wx.times[wxIdx] : null;
+const tIndex = times => { const k = curTime(); const i = k ? times.indexOf(k) : -1; return i < 0 ? Math.min(3, times.length - 1) : i; };
+function bilin(fi, fj, ni, nj, get){
+  const i0 = Math.max(0, Math.min(ni - 2, Math.floor(fi))), j0 = Math.max(0, Math.min(nj - 2, Math.floor(fj)));
+  const a = Math.max(0, Math.min(1, fi - i0)), b = Math.max(0, Math.min(1, fj - j0));
+  return get(i0, j0)*(1-a)*(1-b) + get(i0+1, j0)*a*(1-b) + get(i0, j0+1)*(1-a)*b + get(i0+1, j0+1)*a*b;
+}
+
+/* --- local grid + your spot --- */
 async function loadWeather(){
-  const b = map.getBounds(), N = 5;
-  const lats = [], lngs = [], cells = [];
-  const dLat = (b.getNorth()-b.getSouth())/N, dLng = (b.getEast()-b.getWest())/N;
-  for (let i=0;i<N;i++) for (let j=0;j<N;j++) {
-    const lat = b.getSouth()+dLat*(i+.5), lng = b.getWest()+dLng*(j+.5);
-    lats.push(lat.toFixed(3)); lngs.push(lng.toFixed(3)); // ~100 m grid
-    cells.push({ bounds: [[lat-dLat/2,lng-dLng/2],[lat+dLat/2,lng+dLng/2]], lat, lng });
-  }
-  const here = me || map.getCenter();
+  const b = map.getBounds(), N = map.getZoom() >= 9 ? 6 : 0;
+  const g = { s: b.getSouth(), w: b.getWest(), dLat: (b.getNorth() - b.getSouth()) / (N || 1), dLng: (b.getEast() - b.getWest()) / (N || 1), N };
+  const lats = [], lngs = [];
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) { lats.push((g.s + g.dLat*(i+.5)).toFixed(3)); lngs.push((g.w + g.dLng*(j+.5)).toFixed(3)); }
+  const here = me || { lat: 51.47, lng: -2.60 };
   lats.push(here.lat.toFixed(2)); lngs.push(here.lng.toFixed(2)); // your spot, rounded to ~1 km for privacy
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=temperature_2m,precipitation,weather_code,is_day&past_hours=3&forecast_hours=12&timezone=Europe%2FLondon`;
   try {
-    const r = await fetch(url); let d = await r.json(); if (!Array.isArray(d)) d = [d];
-    const times = d[0].hourly.time;
-    const nowKey = new Date().toLocaleString("sv-SE",{timeZone:"Europe/London"}).slice(0,13).replace(" ","T");
-    const nowIdx = Math.max(0, times.findIndex(t => t.startsWith(nowKey)));
-    wx = { times, nowIdx, cells: cells.map((c,k)=>({ ...c, t:d[k].hourly.temperature_2m, p:d[k].hourly.precipitation, w:d[k].hourly.weather_code, day:d[k].hourly.is_day })),
-           here: { t: d[d.length-1].hourly.temperature_2m, p: d[d.length-1].hourly.precipitation } };
+    const d = await om(lats, lngs, "temperature_2m,precipitation,precipitation_probability");
+    const times = d[0].hourly.time, nowIdx = Math.max(0, times.findIndex(t => t.startsWith(nowKey())));
+    const hd = d[d.length - 1].hourly;
+    wx = { times, nowIdx, grid: N ? { ...g, p: d.slice(0, N*N).map(x => x.hourly.precipitation) } : null,
+           here: { t: hd.temperature_2m, p: hd.precipitation, pp: hd.precipitation_probability || [] } };
     slider.max = times.length - 1;
-    if (!playTimer) { wxIdx = nowIdx; slider.value = wxIdx; }
-    drawWeather(); drawWxChart();
-    mapMsg("wx", null);
+    if (wxFirst && !playTimer) { wxIdx = nowIdx; slider.value = wxIdx; wxFirst = false; }
+    drawWxChart(); redrawWx(); mapMsg("wx", null);
   } catch (e) {
     sliderLabel.textContent = "No data";
     document.getElementById("wxRain").textContent = "Couldn't load the weather. Check you're online and opening the app in your browser.";
     mapMsg("wx", "Weather couldn't load");
   }
 }
-function rainColour(mm){
-  if (mm < 0.1) return null;
-  if (mm < 0.5) return ["#8fc4ff",.35]; if (mm < 2) return ["#3d8fe6",.45];
-  if (mm < 5) return ["#1f5fd1",.55]; return ["#7a3fd1",.6];
+function localRain(lat, lng, t){
+  const g = wx && wx.grid; if (!g) return null;
+  const fi = (lat - g.s) / g.dLat - .5, fj = (lng - g.w) / g.dLng - .5;
+  if (fi < -.5 || fj < -.5 || fi > g.N - .5 || fj > g.N - .5) return null;
+  return bilin(fi, fj, g.N, g.N, (i, j) => g.p[i*g.N + j][t] || 0);
 }
-function tempColour(c){ // cold blue -> mild green -> warm orange
-  const stops = [[-5,[70,90,200]],[5,[80,170,220]],[12,[110,190,120]],[20,[240,190,70]],[30,[220,80,50]]];
-  for (let i=1;i<stops.length;i++) if (c <= stops[i][0]) {
-    const [a,ca]=stops[i-1],[b,cb]=stops[i], f=Math.max(0,(c-a)/(b-a));
-    return `rgb(${ca.map((v,k)=>Math.round(v+(cb[k]-v)*f)).join(",")})`;
+
+/* --- wide grid: pressure, rain, 850 hPa temperature and wind --- */
+const SYN = { lat0: 40, lat1: 66, lng0: -30, lng1: 14, step: 2, F: 3 };
+let synLoading = false;
+async function loadSynoptic(force){
+  if (synLoading) return;
+  const cached = store.get("syn", null);   // kept 45 min so the app stays within Open-Meteo's free limits
+  if (!force && cached && Date.now() - cached.at < 45*60000 && cached.v === 2) { syn = { ...cached, cache: {} }; return redrawWx(); }
+  synLoading = true;
+  const ny = (SYN.lat1 - SYN.lat0)/SYN.step + 1, nx = (SYN.lng1 - SYN.lng0)/SYN.step + 1, lats = [], lngs = [];
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { lats.push(SYN.lat0 + j*SYN.step); lngs.push(SYN.lng0 + i*SYN.step); }
+  try {
+    const d = await om(lats, lngs, "pressure_msl,precipitation,temperature_850hPa,wind_speed_850hPa,wind_direction_850hPa");
+    const raw = { v: 2, at: Date.now(), nx, ny, times: d[0].hourly.time,
+      P: d.map(x => x.hourly.pressure_msl), R: d.map(x => x.hourly.precipitation), T: d.map(x => x.hourly.temperature_850hPa),
+      WS: d.map(x => x.hourly.wind_speed_850hPa), WD: d.map(x => x.hourly.wind_direction_850hPa) };
+    store.set("syn", raw); syn = { ...raw, cache: {} }; mapMsg("syn", null); redrawWx();
+  } catch { mapMsg("syn", "Pressure chart couldn't load"); }
+  synLoading = false;
+}
+
+// Turns the 2° data for one hour into smooth fields, isobars, highs/lows and estimated fronts.
+function computeSyn(S, t){
+  if (S.cache && S.cache[t]) return S.cache[t];
+  const { nx, ny } = S, F = SYN.F, NX = (nx-1)*F + 1, NY = (ny-1)*F + 1, st = SYN.step / F;
+  const up = (arr, passes) => {
+    let g = [];
+    for (let J = 0; J < NY; J++) { const row = [];
+      for (let I = 0; I < NX; I++) row.push(bilin(J/F, I/F, ny, nx, (j, i) => { const v = arr[j*nx + i][t]; return v == null ? 0 : v; }));
+      g.push(row); }
+    for (let p = 0; p < passes; p++) { const s = g.map(r => r.slice());
+      for (let J = 1; J < NY-1; J++) for (let I = 1; I < NX-1; I++) { let a = 0; for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) a += g[J+dj][I+di]; s[J][I] = a / 9; }
+      g = s; }
+    return g;
+  };
+  const ll = (I, J) => [SYN.lat0 + J*st, SYN.lng0 + I*st];
+  const P = up(S.P, 3), R = up(S.R, 2), T = up(S.T, 3);
+  const Uw = S.WS.map((ws, k) => ws.map((s, h) => -(s||0) * Math.sin((S.WD[k][h]||0) * Math.PI/180)));
+  const Vw = S.WS.map((ws, k) => ws.map((s, h) => -(s||0) * Math.cos((S.WD[k][h]||0) * Math.PI/180)));
+  const U = up(Uw, 1), V = up(Vw, 1);
+
+  // marching squares: contour of field g at level lev, as [[lat,lng],[lat,lng]] segments
+  const contour = (g, lev, accept) => {
+    const segs = [];
+    for (let J = 0; J < g.length-1; J++) for (let I = 0; I < g[0].length-1; I++) {
+      if (accept && !accept(I, J)) continue;
+      const a = g[J][I], b = g[J][I+1], c = g[J+1][I+1], d = g[J+1][I];
+      if (![a,b,c,d].every(Number.isFinite)) continue;
+      const pts = [];
+      const e = (v1, v2, p1, p2) => { if ((v1 < lev) !== (v2 < lev)) { const f = (lev - v1)/(v2 - v1); pts.push([p1[0] + (p2[0]-p1[0])*f, p1[1] + (p2[1]-p1[1])*f]); } };
+      e(a, b, ll(I,J), ll(I+1,J)); e(b, c, ll(I+1,J), ll(I+1,J+1)); e(c, d, ll(I+1,J+1), ll(I,J+1)); e(d, a, ll(I,J+1), ll(I,J));
+      if (pts.length === 2) segs.push(pts); else if (pts.length === 4) { segs.push([pts[0], pts[1]]); segs.push([pts[2], pts[3]]); }
+    }
+    return segs;
+  };
+
+  // isobars every 4 hPa
+  let lo = Infinity, hi = -Infinity; for (const r of P) for (const x of r) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  const isobars = [];
+  for (let lev = Math.ceil(lo/4)*4; lev <= hi; lev += 4) isobars.push({ lev, segs: contour(P, lev) });
+
+  // highs and lows: extremes within ±6°
+  const centres = [], Rr = 3*F;
+  for (let J = 2; J < NY-2; J++) for (let I = 2; I < NX-2; I++) {
+    const x = P[J][I]; let mx = true, mn = true;
+    for (let dj = -Rr; dj <= Rr && (mx || mn); dj++) for (let di = -Rr; di <= Rr; di++) {
+      if (!dj && !di) continue; const row = P[J+dj]; if (!row || row[I+di] == null) continue;
+      const y = row[I+di]; if (y >= x) mx = false; if (y <= x) mn = false; }
+    if (mx || mn) centres.push({ ll: ll(I, J), hi: mx, p: Math.round(x) });
   }
-  return "rgb(220,80,50)";
+
+  // estimated fronts: ridges of the 850 hPa temperature gradient (where it changes fastest),
+  // cold if the wind blows from the cold side, warm if from the warm side.
+  const dyKm = st * 111.2, dxKm = J => st * 111.2 * Math.cos((SYN.lat0 + J*st) * Math.PI/180);
+  const G = [], NXv = [], NYv = [];
+  for (let J = 0; J < NY; J++) { G.push([]); NXv.push([]); NYv.push([]);
+    for (let I = 0; I < NX; I++) {
+      if (J === 0 || I === 0 || J === NY-1 || I === NX-1) { G[J].push(NaN); NXv[J].push(0); NYv[J].push(0); continue; }
+      const tx = (T[J][I+1] - T[J][I-1]) / (2*dxKm(J)), ty = (T[J+1][I] - T[J-1][I]) / (2*dyKm), m = Math.hypot(tx, ty) || 1e-9;
+      G[J].push(m * 100); NXv[J].push(tx/m); NYv[J].push(ty/m);   // K per 100 km; unit vector towards warm air
+    } }
+  const D = [], DN = [];
+  for (let J = 0; J < NY; J++) { D.push([]); for (let I = 0; I < NX; I++) {
+    if (J < 2 || I < 2 || J > NY-3 || I > NX-3) { D[J].push(NaN); continue; }
+    const gx = (G[J][I+1] - G[J][I-1]) / (2*dxKm(J)), gy = (G[J+1][I] - G[J-1][I]) / (2*dyKm);
+    D[J].push(gx*NXv[J][I] + gy*NYv[J][I]); } }
+  for (let J = 0; J < NY; J++) { DN.push([]); for (let I = 0; I < NX; I++) {
+    if (J < 3 || I < 3 || J > NY-4 || I > NX-4) { DN[J].push(NaN); continue; }
+    const dx = (D[J][I+1] - D[J][I-1]) / (2*dxKm(J)), dy = (D[J+1][I] - D[J-1][I]) / (2*dyKm);
+    DN[J].push(dx*NXv[J][I] + dy*NYv[J][I]); } }
+  const G0 = 1.1;
+  const segs = contour(D, 0, (I, J) => {
+    const gm = (G[J][I] + G[J][I+1] + G[J+1][I] + G[J+1][I+1]) / 4, dn = (DN[J][I] + DN[J][I+1] + DN[J+1][I] + DN[J+1][I+1]) / 4;
+    const [lat, lng] = ll(I, J);
+    return gm > G0 && dn < 0 && !(lat < 47.5 && lng > 3);   // skip the Alps, where 850 hPa meets the ground
+  });
+  // join segments into lines
+  const key = p => `${p[0].toFixed(3)},${p[1].toFixed(3)}`, ends = new Map();
+  segs.forEach((s, k) => { for (const e of [0, 1]) { const kk = key(s[e]); if (!ends.has(kk)) ends.set(kk, []); ends.get(kk).push(k); } });
+  const used = new Set(), lines = [];
+  const extend = (line, atEnd) => {
+    for (;;) { const tip = atEnd ? line[line.length-1] : line[0];
+      const next = (ends.get(key(tip)) || []).find(k => !used.has(k)); if (next == null) return;
+      used.add(next); const s = segs[next], other = key(s[0]) === key(tip) ? s[1] : s[0];
+      atEnd ? line.push(other) : line.unshift(other); }
+  };
+  segs.forEach((s, k) => { if (used.has(k)) return; used.add(k); const line = [s[0], s[1]]; extend(line, true); extend(line, false); lines.push(line); });
+  const km = (a, b) => dist({ lat: a[0], lng: a[1] }, { lat: b[0], lng: b[1] }) / 1000;
+  const sample = (g, p) => bilin((p[0] - SYN.lat0)/st, (p[1] - SYN.lng0)/st, NY, NX, (j, i) => g[j][i]);
+  const fronts = [];
+  for (const line of lines) {
+    let len = 0; for (let k = 1; k < line.length; k++) len += km(line[k-1], line[k]);
+    if (len < 500) continue;
+    // per point: which way the wind pushes the front, and which side is warm
+    const info = line.map(p => { const nx = sample(NXv, p), nyv = sample(NYv, p), m = Math.hypot(nx, nyv) || 1;
+      return { c: sample(U, p)*nx/m + sample(V, p)*nyv/m, n: [nx/m, nyv/m] }; });
+    const sm = info.map((_, k) => { let a = 0, c = 0; for (let q = Math.max(0, k-4); q <= Math.min(info.length-1, k+4); q++) { a += info[q].c; c++; } return a / c; });
+    fronts.push({ pts: line, kind: sm.map(c => c > 0 ? "cold" : "warm"), move: info.map((o, k) => [o.n[0]*Math.sign(sm[k] || 1), o.n[1]*Math.sign(sm[k] || 1)]) });
+  }
+  const out = { P, R, isobars, centres, fronts, NX, NY, st };
+  if (S.cache) S.cache[t] = out;
+  return out;
 }
-function drawWeather(){
-  if (!wx) return;
-  layers.wx.clearLayers(); layers.temp.clearLayers();
-  const i = wxIdx, off = i - wx.nowIdx;
-  sliderLabel.textContent = off === 0 ? "Now" : (off > 0 ? `+${off} h` : `${off} h`);
-  sliderLabel.title = wx.times[i].slice(11);
-  if (!wx.cells.some(c => c.p[i] >= 0.1)) sliderLabel.textContent += " · dry";
-  for (const c of wx.cells) {
-    const rc = rainColour(c.p[i]);
-    if (rc) L.rectangle(c.bounds, { stroke:false, fillColor:rc[0], fillOpacity:rc[1], interactive:false }).addTo(layers.wx);
-    L.rectangle(c.bounds, { stroke:false, fillColor:tempColour(c.t[i]), fillOpacity:.28, interactive:false }).addTo(layers.temp);
-    L.marker([c.lat,c.lng], { icon:L.divIcon({ className:"", html:`<div class="temp-pin"><span class="sym">${wxSymbol(c.w?.[i], c.day?.[i])}</span>${Math.round(c.t[i])}°</div>`, iconAnchor:[22,10] }), interactive:false }).addTo(layers.temp);
+function synRain(C, lat, lng){
+  const fi = (lat - SYN.lat0)/C.st, fj = (lng - SYN.lng0)/C.st;
+  if (fi < 0 || fj < 0 || fi > C.NY-1 || fj > C.NX-1) return null;
+  return bilin(fi, fj, C.NY, C.NX, (j, i) => C.R[j][i]);
+}
+
+/* --- canvas layer: rain, isobars, fronts, highs/lows drawn in screen space --- */
+const RAIN = [[0.05,[150,190,255,.22]],[0.3,[95,145,250,.5]],[1,[45,105,235,.68]],[3,[30,190,225,.8]],[6,[140,235,160,.86]],[12,[255,245,120,.9]]];
+function rainRGBA(v){
+  if (!(v >= RAIN[0][0])) return null;
+  for (let k = 1; k < RAIN.length; k++) if (v < RAIN[k][0]) {
+    const [a, ca] = RAIN[k-1], [b, cb] = RAIN[k], f = (v - a)/(b - a);
+    return ca.map((x, q) => x + (cb[q] - x)*f);
+  }
+  return RAIN[RAIN.length-1][1];
+}
+function drawWxCanvas(ctx, w, h, m){
+  const z = m.getZoom(), dark = z <= 8;
+  const C = syn ? computeSyn(syn, tIndex(syn.times)) : null;
+  if (show.rain && (wx || C)) {
+    const step = 4, cw = Math.ceil(w/step), ch = Math.ceil(h/step);
+    const off = document.createElement("canvas"); off.width = cw; off.height = ch;
+    const oc = off.getContext("2d"), img = oc.createImageData(cw, ch);
+    for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+      const p = m.containerPointToLatLng([x*step + step/2, y*step + step/2]);
+      let v = z >= 9 && wx ? localRain(p.lat, p.lng, wxIdx) : null;
+      if (v == null && C) v = synRain(C, p.lat, p.lng);
+      const c = rainRGBA(v); if (!c) continue;
+      const o = (y*cw + x)*4; img.data[o] = c[0]; img.data[o+1] = c[1]; img.data[o+2] = c[2]; img.data[o+3] = c[3]*255;
+    }
+    oc.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high"; ctx.drawImage(off, 0, 0, w, h);
+  }
+  if (!show.iso || !C) return;
+  const P = ll => m.latLngToContainerPoint(ll);
+  // isobars
+  ctx.lineJoin = ctx.lineCap = "round";
+  ctx.strokeStyle = dark ? "rgba(255,255,255,.75)" : "rgba(40,48,110,.7)"; ctx.lineWidth = dark ? 1.3 : 1.5;
+  ctx.font = "600 10px 'Barlow Condensed', sans-serif"; ctx.fillStyle = ctx.strokeStyle;
+  for (const iso of C.isobars) {
+    ctx.beginPath();
+    for (const s of iso.segs) { const a = P(s[0]), b = P(s[1]); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+    ctx.stroke();
+    if (!dark && iso.segs.length) { const s = iso.segs[Math.floor(iso.segs.length/2)], a = P(s[0]); if (a.x > 0 && a.y > 0 && a.x < w && a.y < h) ctx.fillText(iso.lev, a.x + 3, a.y - 3); }
+  }
+  // fronts
+  for (const f of C.fronts) {
+    const sp = f.pts.map(P);
+    ctx.beginPath(); sp.forEach((p, k) => k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+    ctx.strokeStyle = "rgba(255,255,255,.55)"; ctx.lineWidth = 5; ctx.stroke();
+    ctx.strokeStyle = "#0a1430"; ctx.lineWidth = 3; ctx.stroke();
+    let acc = 0, next = 22;
+    for (let k = 1; k < sp.length; k++) {
+      const a = sp[k-1], b = sp[k], seg = Math.hypot(b.x - a.x, b.y - a.y); if (!seg) continue;
+      while (acc + seg >= next) {
+        const f0 = (next - acc)/seg, px = a.x + (b.x - a.x)*f0, py = a.y + (b.y - a.y)*f0;
+        const tx = (b.x - a.x)/seg, ty = (b.y - a.y)/seg;
+        const mv = f.move[k], want = [mv[0], -mv[1]];           // east/north -> screen
+        let nx = -ty, ny = tx; const flip = nx*want[0] + ny*want[1] < 0; if (flip) { nx = -nx; ny = -ny; }
+        if (f.kind[k] === "cold") {
+          ctx.beginPath(); ctx.moveTo(px - tx*7, py - ty*7); ctx.lineTo(px + tx*7, py + ty*7); ctx.lineTo(px + nx*10, py + ny*10); ctx.closePath();
+          ctx.fillStyle = "#2f6bff"; ctx.fill();
+        } else {
+          const ang = Math.atan2(ty, tx);
+          ctx.beginPath(); ctx.arc(px, py, 7, ang, ang + Math.PI, flip); ctx.closePath();
+          ctx.fillStyle = "#e5333b"; ctx.fill();
+        }
+        next += 44;
+      }
+      acc += seg;
+    }
+  }
+  // highs and lows
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const c of C.centres) {
+    const p = P(c.ll); if (p.x < -40 || p.y < -20 || p.x > w + 40 || p.y > h + 20) continue;
+    ctx.font = "700 17px 'Barlow Condensed', sans-serif";
+    ctx.lineWidth = 3; ctx.strokeStyle = dark ? "rgba(0,0,0,.45)" : "rgba(255,255,255,.9)";
+    ctx.fillStyle = dark ? "#fff" : (c.hi ? "#1f5fd1" : "#c4492f");
+    ctx.strokeText(c.hi ? "HIGH" : "LOW", p.x, p.y); ctx.fillText(c.hi ? "HIGH" : "LOW", p.x, p.y);
+    ctx.font = "600 11px 'Barlow Condensed', sans-serif";
+    ctx.strokeText(c.p, p.x, p.y + 13); ctx.fillText(c.p, p.x, p.y + 13);
+  }
+  ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+}
+const WxCanvas = L.Layer.extend({
+  onAdd(m){ this._m = m; this._c = L.DomUtil.create("canvas", "wx-canvas leaflet-zoom-hide");
+    m.getPanes().overlayPane.appendChild(this._c); m.on("moveend zoomend resize", this.redraw, this); this.redraw(); },
+  onRemove(m){ this._c.remove(); m.off("moveend zoomend resize", this.redraw, this); },
+  redraw(){
+    const m = this._m; if (!m) return;
+    const s = m.getSize(), dpr = window.devicePixelRatio || 1, c = this._c;
+    L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
+    c.width = s.x*dpr; c.height = s.y*dpr; c.style.width = s.x + "px"; c.style.height = s.y + "px";
+    const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    try { drawWxCanvas(ctx, s.x, s.y, m); } catch (e) { console.warn(e); }
+  }
+});
+const wxCanvas = new WxCanvas().addTo(map);
+
+/* --- temperature labels, BBC style --- */
+const PLACES_LOCAL = [["Henleaze",51.489,-2.605],["Westbury",51.494,-2.620],["Clifton",51.456,-2.620],["City centre",51.4545,-2.592],
+  ["Bedminster",51.440,-2.602],["Fishponds",51.480,-2.525],["Filton",51.507,-2.575],["Cribbs",51.524,-2.596],["Brislington",51.433,-2.550],["Avonmouth",51.500,-2.699]];
+const PLACES_UK = [["Stornoway",58.21,-6.39],["Aberdeen",57.15,-2.09],["Glasgow",55.86,-4.25],["Edinburgh",55.95,-3.19],["Belfast",54.60,-5.93],
+  ["Newcastle",54.98,-1.61],["Liverpool",53.41,-2.98],["Hull",53.74,-0.33],["Birmingham",52.49,-1.89],["Norwich",52.63,1.30],
+  ["Cardiff",51.48,-3.18],["Bristol",51.45,-2.59],["London",51.51,-0.13],["Plymouth",50.38,-4.14]];
+async function loadPlaces(){
+  const all = [...PLACES_LOCAL, ...PLACES_UK];
+  try {
+    const d = await om(all.map(p => p[1]), all.map(p => p[2]), "temperature_2m");
+    placeT = { times: d[0].hourly.time, t: d.map(x => x.hourly.temperature_2m) };
+    drawTemps();
+  } catch {}
+}
+function drawTemps(){
+  layers.temp.clearLayers();
+  if (!show.temps || !placeT) return;
+  const z = map.getZoom(), t = tIndex(placeT.times);
+  const set = z >= 10 ? PLACES_LOCAL.map((p, k) => [p, k]) : z <= 9 ? PLACES_UK.map((p, k) => [p, k + PLACES_LOCAL.length]) : [];
+  for (const [[name, lat, lng], k] of set) {
+    const v = placeT.t[k][t]; if (v == null) continue;
+    L.marker([lat, lng], { interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "", iconAnchor: [4, 11],
+        html: `<div class="tl"><i></i><b class="num">${Math.round(v)}</b><span>${name}</span></div>` }) }).addTo(layers.temp);
   }
 }
+
+/* --- redraw everything for the slider hour --- */
+function redrawWx(){
+  if (wx) {
+    const off = wxIdx - wx.nowIdx;
+    sliderLabel.textContent = off === 0 ? "Now" : (off > 0 ? `+${off} h` : `${off} h`);
+    sliderLabel.title = wx.times[wxIdx].slice(11);
+    const wet = (wx.here.p[wxIdx] || 0) >= .05 || (wx.grid && wx.grid.p.some(c => (c[wxIdx] || 0) >= .05));
+    if (!wet && map.getZoom() >= 9) sliderLabel.textContent += " · dry";
+  }
+  if (map.getZoom() < 9 && !syn) loadSynoptic();
+  wxCanvas.redraw(); drawTemps();
+}
+
 function drawWxChart(){
-  const svg = document.getElementById("wxChart"), h = wx.here, n = h.t.length;
-  const W=360, H=140, L0=28, R0=28, T0=10, B0=24, cw=(W-L0-R0)/n;
-  const pMax = Math.max(2, ...h.p), tMin = Math.floor(Math.min(...h.t))-1, tMax = Math.ceil(Math.max(...h.t))+1;
-  const y = v => T0 + (H-T0-B0) * (1 - (v-tMin)/(tMax-tMin));
-  let s = `<line x1="${L0}" x2="${W-R0}" y1="${H-B0}" y2="${H-B0}" stroke="var(--line)"/>`;
-  const nx = L0 + cw*wx.nowIdx;
-  s += `<rect x="${nx}" y="${T0}" width="${cw}" height="${H-T0-B0}" fill="var(--accent)" opacity=".18"/>`;
-  h.p.forEach((p,k)=>{ const bh=(H-T0-B0)*p/pMax; if (p>0) s+=`<rect x="${L0+cw*k+2}" y="${H-B0-bh}" width="${cw-4}" height="${bh}" rx="2" fill="var(--rain)"/>`; });
-  s += `<polyline fill="none" stroke="var(--late)" stroke-width="2.2" points="${h.t.map((t,k)=>`${L0+cw*(k+.5)},${y(t)}`).join(" ")}"/>`;
-  s += `<circle cx="${L0+cw*(wx.nowIdx+.5)}" cy="${y(h.t[wx.nowIdx])}" r="4" fill="var(--late)"/>`;
+  const svg = document.getElementById("wxChart"), h = wx.here, n = h.t.length, now = wx.nowIdx;
+  const W = 360, H = 160, L0 = 28, R0 = 34, T0 = 16, B0 = 26, cw = (W - L0 - R0)/n, base = H - B0, ph = H - T0 - B0;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const pMax = Math.max(1, Math.ceil(Math.max(...h.p.map(v => v || 0)))), tMin = Math.floor(Math.min(...h.t)) - 1, tMax = Math.ceil(Math.max(...h.t)) + 1;
+  const y = v => T0 + ph * (1 - (v - tMin)/(tMax - tMin));
+  let s = `<line x1="${L0}" x2="${W-R0}" y1="${base}" y2="${base}" stroke="var(--line)"/>`;
+  s += `<rect x="${L0 + cw*now}" y="${T0}" width="${cw}" height="${ph}" fill="var(--accent)" opacity=".18"/>`;
+  s += `<line x1="${L0 + cw*(now + 1)}" x2="${L0 + cw*(now + 1)}" y1="${T0 - 6}" y2="${base}" stroke="var(--muted)" stroke-dasharray="3 3"/>`;
+  s += `<text x="${L0 + cw*(now + 1) + 3}" y="${T0 - 5}" style="font-size:9px">forecast →</text>`;
+  h.p.forEach((p, k) => {
+    p = p || 0; const bh = ph * Math.min(p, pMax)/pMax, x = L0 + cw*k + 2, bw = cw - 4;
+    if (p >= .05) s += k <= now
+      ? `<rect x="${x}" y="${base - bh}" width="${bw}" height="${bh}" rx="2" fill="var(--rain)"/>`
+      : `<rect x="${x}" y="${base - bh}" width="${bw}" height="${bh}" rx="2" fill="var(--rain)" fill-opacity=".35" stroke="var(--rain)" stroke-width="1"/>`;
+    const pp = h.pp[k];
+    if (k > now && pp != null && pp >= 20) s += `<text x="${x + bw/2}" y="${base - bh - 3}" text-anchor="middle" style="font-size:8.5px;fill:var(--rain)">${pp}%</text>`;
+  });
+  s += `<polyline fill="none" stroke="var(--late)" stroke-width="2.2" points="${h.t.map((t, k) => `${L0 + cw*(k+.5)},${y(t)}`).join(" ")}"/>`;
+  s += `<circle cx="${L0 + cw*(now+.5)}" cy="${y(h.t[now])}" r="4" fill="var(--late)"/>`;
   s += `<text x="${L0-4}" y="${y(tMax)+4}" text-anchor="end">${tMax}°</text><text x="${L0-4}" y="${y(tMin)}" text-anchor="end">${tMin}°</text>`;
-  s += `<text x="${W-R0+4}" y="${T0+8}">${pMax.toFixed(0)}mm</text>`;
-  [0, wx.nowIdx, n-1].forEach(k => s += `<text x="${L0+cw*(k+.5)}" y="${H-6}" text-anchor="middle">${k===wx.nowIdx?"Now":wx.times[k].slice(11,16)}</text>`);
+  s += `<text x="${W-R0+4}" y="${T0+4}" style="fill:var(--rain)">${pMax} mm</text><text x="${W-R0+4}" y="${base}" style="fill:var(--rain)">0</text>`;
+  [0, now, n-1].forEach(k => s += `<text x="${L0 + cw*(k+.5)}" y="${H-8}" text-anchor="middle">${k === now ? "Now" : wx.times[k].slice(11, 16)}</text>`);
   svg.innerHTML = s;
-  document.getElementById("wxTemp").textContent = `${Math.round(h.t[wx.nowIdx])}°C`;
-  document.getElementById("wxRain").textContent = `${h.p[wx.nowIdx].toFixed(1)} mm rain this hour · ${h.p.slice(wx.nowIdx+1).reduce((a,b)=>a+b,0).toFixed(1)} mm due in next 12 h`;
+  const due = h.p.slice(now + 1).reduce((a, b) => a + (b || 0), 0), peak = Math.max(0, ...h.pp.slice(now + 1).map(v => v || 0));
+  document.getElementById("wxTemp").textContent = `${Math.round(h.t[now])}°C`;
+  document.getElementById("wxRain").textContent = `${(h.p[now] || 0).toFixed(1)} mm rain this hour · ${due.toFixed(1)} mm predicted in the next 12 h (up to ${peak}% chance)`;
 }
-slider.oninput = () => { wxIdx = +slider.value; drawWeather(); drawIsobars(); };
+
+slider.oninput = () => { wxIdx = +slider.value; redrawWx(); };
 document.getElementById("playBtn").onclick = e => {
   if (playTimer) { clearInterval(playTimer); playTimer = null; e.target.textContent = "▶"; return; }
   e.target.textContent = "❚❚";
-  playTimer = setInterval(() => { wxIdx = (wxIdx + 1) % (+slider.max + 1); slider.value = wxIdx; drawWeather(); drawIsobars(); }, 700);
+  playTimer = setInterval(() => { wxIdx = (wxIdx + 1) % (+slider.max + 1); slider.value = wxIdx; redrawWx(); }, 900);
 };
-function toggleChip(id, layer){
+function setTimebar(){ document.getElementById("timebar").hidden = !(show.rain || show.temps || show.iso); }
+for (const [id, k] of [["chipRain", "rain"], ["chipTemp", "temps"], ["chipIso", "iso"]]) {
   const b = document.getElementById(id);
-  b.onclick = () => { const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", on);
-    on ? layer.addTo(map) : map.removeLayer(layer);
-    document.getElementById("timebar").hidden = !(map.hasLayer(layers.wx) || map.hasLayer(layers.temp) || map.hasLayer(layers.iso)); };
-}
-toggleChip("chipRain", layers.wx); toggleChip("chipTemp", layers.temp); toggleChip("chipBus", layers.bus);
-
-function wxSymbol(code, day){
-  if (code == null) return "";
-  if (code === 0) return day ? "☀️" : "🌙";
-  if (code <= 2) return day ? "🌤️" : "☁️";
-  if (code === 3) return "☁️";
-  if (code === 45 || code === 48) return "🌫️";
-  if (code >= 51 && code <= 57) return "🌦️";
-  if (code >= 61 && code <= 67) return "🌧️";
-  if (code >= 71 && code <= 77) return "🌨️";
-  if (code >= 80 && code <= 82) return "🌦️";
-  if (code >= 85 && code <= 86) return "🌨️";
-  if (code >= 95) return "⛈️";
-  return "";
-}
-
-/* ---------- isobars: UK & Ireland pressure grid from Open-Meteo, contoured every 4 hPa ---------- */
-const SYN = { lat0:47, lat1:62, lng0:-14, lng1:6, step:1 };
-let syn = null, synLoading = false;
-async function loadSynoptic(){
-  if (synLoading) return; synLoading = true;
-  const lats = [], lngs = [];
-  const ny = (SYN.lat1-SYN.lat0)/SYN.step+1, nx = (SYN.lng1-SYN.lng0)/SYN.step+1;
-  for (let j=0;j<ny;j++) for (let i=0;i<nx;i++) { lats.push(SYN.lat0+j*SYN.step); lngs.push(SYN.lng0+i*SYN.step); }
-  try {
-    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=pressure_msl&past_hours=3&forecast_hours=12&timezone=Europe%2FLondon`);
-    const d = await r.json();
-    syn = { nx, ny, times: d[0].hourly.time, p: d.map(x => x.hourly.pressure_msl) };
-    mapMsg("iso", null);
-    drawIsobars();
-  } catch { mapMsg("iso", "Isobars couldn't load"); }
-  synLoading = false;
-}
-function synGrid(t){ // smoothed grid at time t, 4x finer than the 1° data
-  const { nx, ny, p } = syn, F = 4, NX = (nx-1)*F+1, NY = (ny-1)*F+1;
-  const v = (i,j) => p[j*nx+i][t];
-  let g = [];
-  for (let J=0;J<NY;J++){ const row=[]; const j=Math.min(ny-2,Math.floor(J/F)), fy=J/F-j;
-    for (let I=0;I<NX;I++){ const i=Math.min(nx-2,Math.floor(I/F)), fx=I/F-i;
-      row.push(v(i,j)*(1-fx)*(1-fy)+v(i+1,j)*fx*(1-fy)+v(i,j+1)*(1-fx)*fy+v(i+1,j+1)*fx*fy); }
-    g.push(row); }
-  for (let pass=0; pass<3; pass++){ // gentle smoothing so lines curve
-    const s = g.map(r=>r.slice());
-    for (let J=1;J<NY-1;J++) for (let I=1;I<NX-1;I++){ let a=0; for (let dj=-1;dj<=1;dj++) for (let di=-1;di<=1;di++) a+=g[J+dj][I+di]; s[J][I]=a/9; }
-    g = s; }
-  return { g, NX, NY, F };
-}
-function drawIsobars(){
-  layers.iso.clearLayers();
-  if (!syn || !map.hasLayer(layers.iso)) return;
-  // match the slider's hour
-  const key = wx ? wx.times[wxIdx] : null;
-  let t = key ? syn.times.indexOf(key) : -1; if (t < 0) t = Math.min(syn.times.length-1, 3);
-  const { g, NX, NY, F } = synGrid(t), st = SYN.step/F;
-  const ll = (I,J) => [SYN.lat0 + J*st, SYN.lng0 + I*st];
-  let lo = Infinity, hi = -Infinity; for (const r of g) for (const x of r){ if (x<lo) lo=x; if (x>hi) hi=x; }
-  for (let lev = Math.ceil(lo/4)*4; lev <= hi; lev += 4) {
-    const segs = [];
-    for (let J=0;J<NY-1;J++) for (let I=0;I<NX-1;I++){
-      const a=g[J][I], b=g[J][I+1], c=g[J+1][I+1], d=g[J+1][I];
-      const pts = [];
-      const edge = (v1,v2,p1,p2) => { if ((v1<lev) !== (v2<lev)) { const f=(lev-v1)/(v2-v1); pts.push([p1[0]+(p2[0]-p1[0])*f, p1[1]+(p2[1]-p1[1])*f]); } };
-      edge(a,b,ll(I,J),ll(I+1,J)); edge(b,c,ll(I+1,J),ll(I+1,J+1)); edge(c,d,ll(I+1,J+1),ll(I,J+1)); edge(d,a,ll(I,J+1),ll(I,J));
-      if (pts.length === 2) segs.push(pts);
-      else if (pts.length === 4) { segs.push([pts[0],pts[1]]); segs.push([pts[2],pts[3]]); }
-    }
-    if (!segs.length) continue;
-    L.polyline(segs, { color:"#3a3f8f", weight: lev % 20 === 0 ? 2.2 : 1.3, opacity:.8, interactive:false }).addTo(layers.iso);
-    const m = segs[Math.floor(segs.length/2)][0];
-    L.marker(m, { icon:L.divIcon({ className:"", html:`<span class="isobar-lbl">${lev}</span>`, iconAnchor:[14,7] }), interactive:false }).addTo(layers.iso);
-  }
-  // highs and lows: extremes within ±3° on the smoothed grid
-  const R = 3*F;
-  for (let J=R;J<NY-R;J+=2) for (let I=R;I<NX-R;I+=2){
-    const x = g[J][I]; let isMax = true, isMin = true;
-    for (let dj=-R;dj<=R && (isMax||isMin);dj+=2) for (let di=-R;di<=R;di+=2){ if (!dj && !di) continue; const y=g[J+dj][I+di]; if (y>=x) isMax=false; if (y<=x) isMin=false; }
-    if (isMax || isMin) L.marker(ll(I,J), { icon:L.divIcon({ className:"", html:`<div class="pcentre ${isMax?"hi":"lo"}">${isMax?"H":"L"}<small>${Math.round(x)}</small></div>`, iconAnchor:[14,16] }), interactive:false }).addTo(layers.iso);
-  }
-}
-(() => {
-  const b = document.getElementById("chipIso");
   b.onclick = () => {
-    const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", on);
-    if (on) { layers.iso.addTo(map); if (map.getZoom() > 7) map.fitBounds([[49.5,-11],[59.5,2.5]]); syn ? drawIsobars() : loadSynoptic(); }
-    else { map.removeLayer(layers.iso); mapMsg("iso", null); }
-    document.getElementById("timebar").hidden = !(map.hasLayer(layers.wx) || map.hasLayer(layers.temp) || map.hasLayer(layers.iso));
+    show[k] = !show[k]; b.setAttribute("aria-pressed", show[k]);
+    if (k === "iso" && show.iso) { if (map.getZoom() > 6) map.fitBounds([[44, -22], [62, 10]]); if (!syn) loadSynoptic(); }
+    setTimebar(); redrawWx();
   };
-  setInterval(() => { if (map.hasLayer(layers.iso)) loadSynoptic(); }, 30 * 60000);
-})();
+}
+(() => { const b = document.getElementById("chipBus");
+  b.onclick = () => { const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", on); on ? layers.bus.addTo(map) : map.removeLayer(layers.bus); }; })();
+map.on("zoomend", drawTemps);
+setInterval(() => { if (show.iso || map.getZoom() < 9) loadSynoptic(true); }, 60*60000);
+setInterval(loadPlaces, 30*60000);
 
 /* ---------- live bus check (Settings) ---------- */
 document.getElementById("testBuses").onclick = async () => {
@@ -866,6 +1065,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden && ac
 
 renderWork();
 loadWeather();
+loadPlaces();
 startLocation();
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
