@@ -26,6 +26,14 @@ export default {
         const [deps, info] = await Promise.all([departures(stop), stopInfo(stop)]);
         return json({ stop, ...info, departures: deps, fetched: new Date().toISOString() }, 200, cors);
       }
+      if (url.pathname === "/bods") {
+        // Government Bus Open Data Service live positions (SIRI-VM XML), passed straight through.
+        const p = new URLSearchParams();
+        for (const k of ["boundingBox", "operatorRef", "lineRef"]) if (url.searchParams.get(k)) p.set(k, url.searchParams.get(k));
+        p.set("api_key", url.searchParams.get("key") || "");
+        const r = await fetch(`https://data.bus-data.dft.gov.uk/api/v1/datafeed/?${p}`, { headers: { "User-Agent": UA } });
+        return new Response(await r.text(), { status: r.status, headers: { ...cors, "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "no-store" } });
+      }
       if (url.pathname === "/vehicles") {
         const q = ["xmin", "ymin", "xmax", "ymax"].map(k => `${k}=${encodeURIComponent(url.searchParams.get(k) || "")}`).join("&");
         const r = await fetch(`https://bustimes.org/vehicles.json?${q}`, { headers: { "User-Agent": UA } });

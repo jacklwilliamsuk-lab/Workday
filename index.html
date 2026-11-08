@@ -194,6 +194,9 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
     <label for="relayUrl">Bus relay address</label>
     <input id="relayUrl" type="url" placeholder="https://workday-bus.yourname.workers.dev">
     <p class="note">Without this the bus panel shows sample times. See the README for the 5-minute setup.</p>
+    <label for="bodsKey">Bus Open Data key (live buses on the map)</label>
+    <input id="bodsKey" type="text" autocomplete="off" spellcheck="false" placeholder="From data.bus-data.dft.gov.uk">
+    <p class="note">Free from the government's Bus Open Data Service. Stored only on this phone.</p>
     <label for="locOverride">Location</label>
     <select id="locOverride">
       <option value="gps">Use my phone's location</option>
@@ -230,13 +233,14 @@ const store = {
   set(k, v){ try{ localStorage.setItem("workday."+k, JSON.stringify(v)); }catch{} }
 };
 let relay = store.get("relay", "");
+let bodsKey = store.get("bodsKey", "");
 let locMode = store.get("loc", "gps");
 let weekGoal = store.get("goal", 37.5);
 
 /* ---------- map ---------- */
 const map = L.map("map", { zoomControl:false, attributionControl:true }).setView([51.47, -2.60], 13);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom:19, attribution:'© OpenStreetMap · weather Open-Meteo · buses bustimes.org'
+  maxZoom:19, attribution:'© OpenStreetMap · weather Open-Meteo · buses Bus Open Data Service / bustimes.org'
 }).addTo(map);
 const layers = { wx: L.layerGroup().addTo(map), temp: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map) };
 let meMarker = null, me = null, activeKey = null;
@@ -358,32 +362,74 @@ async function refreshDepartures(){
     : `Updated ${new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})} · green = live tracked`;
 }
 
+// Live bus positions. Source 1: the government's Bus Open Data Service (needs a free key).
+// Source 2: the bus relay (bustimes.org). Both give the same shape: {lat,lng,heading,service,destination}.
+let bodsDirectOk = true; // set false once the phone's browser refuses a direct call
+function parseSiri(xml){
+  const doc = new DOMParser().parseFromString(xml, "text/xml"), out = [];
+  const tx = (el, tag) => { const n = el.getElementsByTagNameNS("*", tag)[0]; return n ? n.textContent.trim() : ""; };
+  for (const va of doc.getElementsByTagNameNS("*", "VehicleActivity")) {
+    const lat = parseFloat(tx(va, "Latitude")), lng = parseFloat(tx(va, "Longitude"));
+    if (isNaN(lat) || isNaN(lng)) continue;
+    const b = tx(va, "Bearing");
+    out.push({ lat, lng, heading: b === "" ? null : parseFloat(b), service: tx(va, "LineRef") || tx(va, "PublishedLineName"),
+               destination: (tx(va, "DestinationName") || "").replace(/_/g, " "), when: tx(va, "RecordedAtTime") });
+  }
+  return out;
+}
+async function fetchBods(box){
+  const q = `boundingBox=${box.ymin.toFixed(4)},${box.ymax.toFixed(4)},${box.xmin.toFixed(4)},${box.xmax.toFixed(4)}&operatorRef=FBRI`;
+  if (bodsDirectOk) {
+    try {
+      const r = await fetch(`https://data.bus-data.dft.gov.uk/api/v1/datafeed/?${q}&api_key=${encodeURIComponent(bodsKey)}`);
+      if (r.status === 401 || r.status === 403) throw Object.assign(new Error("key"), { badKey: true });
+      if (r.ok) return { list: parseSiri(await r.text()), src: "Bus Open Data Service" };
+    } catch (e) {
+      if (e.badKey) throw e;
+      bodsDirectOk = false; // browser blocked it: fall back to the relay below
+    }
+  }
+  if (!relay) throw Object.assign(new Error("blocked"), { blocked: true });
+  const r = await fetch(`${relay.replace(/\/$/,"")}/bods?${q}&key=${encodeURIComponent(bodsKey)}`);
+  if (r.status === 401 || r.status === 403) throw Object.assign(new Error("key"), { badKey: true });
+  return { list: parseSiri(await r.text()), src: "Bus Open Data Service via relay" };
+}
+async function fetchBustimes(box){
+  const r = await fetch(`${relay.replace(/\/$/,"")}/vehicles?xmin=${box.xmin}&ymin=${box.ymin}&xmax=${box.xmax}&ymax=${box.ymax}`);
+  return { list: (await r.json()).vehicles || [], src: "bustimes.org" };
+}
+
 async function refreshVehicles(){
-  layers.bus.clearLayers();
-  if (!relay) { mapMsg("bus", "Live bus positions need the bus relay: Settings"); return; }
   if (document.hidden) return;
+  if (!bodsKey && !relay) { layers.bus.clearLayers(); mapMsg("bus", "Live bus positions: add your Bus Open Data key in Settings"); return; }
   const stop = STOPS[activeKey];
   // Dorset Road South: south-bound buses approach from the north, so look only north of the stop.
   const box = activeKey === "dorset"
     ? { xmin: stop.lng-0.06, xmax: stop.lng+0.04, ymin: stop.lat, ymax: stop.lat+0.06 }
     : { xmin: stop.lng-0.05, xmax: stop.lng+0.05, ymin: stop.lat-0.04, ymax: stop.lat+0.03 };
-  try {
-    const r = await fetch(`${relay.replace(/\/$/,"")}/vehicles?xmin=${box.xmin}&ymin=${box.ymin}&xmax=${box.xmax}&ymax=${box.ymax}`);
-    const d = await r.json();
-    const want = new Set(stop.services.map(s => s.toLowerCase()));
-    for (const v of d.vehicles || []) {
-      if (!want.has(v.service.toLowerCase())) continue;
-      if (activeKey === "dorset") {
-        // keep only buses heading south (compass 100°–260°) that haven't reached the stop yet
-        if (v.heading == null || v.heading < 100 || v.heading > 260) continue;
-        if (stop.notTo.test(v.destination || "")) continue;
-        if (v.lat < stop.lat) continue;
-      }
-      L.marker([v.lat, v.lng], { icon: L.divIcon({ className:"", html:`<div class="bus-pin">${v.service}</div>`, iconAnchor:[14,12] }) })
-        .bindPopup(`<b>${v.service}</b> to ${v.destination || "?"}`).addTo(layers.bus);
+  let res;
+  try { res = bodsKey ? await fetchBods(box) : await fetchBustimes(box); }
+  catch (e) {
+    layers.bus.clearLayers();
+    mapMsg("bus", e.badKey ? "Bus Open Data key not accepted: check it in Settings"
+      : e.blocked ? "Your phone's browser blocks the government feed directly, so it needs the bus relay too"
+      : "Couldn't load live buses");
+    return;
+  }
+  layers.bus.clearLayers();
+  const want = new Set(stop.services.map(s => s.toLowerCase()));
+  for (const v of res.list) {
+    if (!want.has(String(v.service).toLowerCase())) continue;
+    if (activeKey === "dorset") {
+      // south-bound only: not heading for Cribbs/Brentry/Sodbury, north of the stop, and heading south when a bearing is given
+      if (stop.notTo.test(v.destination || "")) continue;
+      if (v.lat < stop.lat) continue;
+      if (v.heading != null && (v.heading < 100 || v.heading > 260)) continue;
     }
-    mapMsg("bus", layers.bus.getLayers().length ? null : (activeKey==="dorset" ? "No south-bound buses on their way right now" : "No 1, 2, 2a or Y6 buses nearby right now"));
-  } catch { mapMsg("bus", "Couldn't reach the bus relay"); }
+    L.marker([v.lat, v.lng], { icon: L.divIcon({ className:"", html:`<div class="bus-pin">${v.service}</div>`, iconAnchor:[14,12] }) })
+      .bindPopup(`<b>${v.service}</b> to ${v.destination || "?"}`).addTo(layers.bus);
+  }
+  mapMsg("bus", layers.bus.getLayers().length ? null : (activeKey==="dorset" ? "No south-bound buses on their way right now" : "No 1, 2, 2a or Y6 buses nearby right now"));
 }
 
 /* ---------- weather (Open-Meteo, grid over the visible map) ---------- */
@@ -568,12 +614,14 @@ document.getElementById("importFile").onchange = async e => {
 const dlg = document.getElementById("settings");
 document.getElementById("settingsBtn").onclick = () => {
   document.getElementById("relayUrl").value = relay;
+  document.getElementById("bodsKey").value = bodsKey;
   document.getElementById("locOverride").value = locMode;
   document.getElementById("weekGoal").value = weekGoal || "";
   dlg.showModal();
 };
 dlg.addEventListener("close", () => {
   relay = document.getElementById("relayUrl").value.trim(); store.set("relay", relay);
+  bodsKey = document.getElementById("bodsKey").value.trim(); store.set("bodsKey", bodsKey); bodsDirectOk = true;
   const nl = document.getElementById("locOverride").value;
   weekGoal = parseFloat(document.getElementById("weekGoal").value) || 0; store.set("goal", weekGoal);
   if (nl !== locMode) { locMode = nl; store.set("loc", nl); activeKey = null; startLocation(); } else loadBuses();

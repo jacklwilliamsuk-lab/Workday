@@ -28,6 +28,14 @@ Location only works on an `https://` address, so opening the file from your phon
 
 Until then the bus panel shows clearly labelled sample times.
 
+## Live buses on the map (government feed)
+
+1. Register free at https://data.bus-data.dft.gov.uk/account/signup/ (choose the data consumer / "I want to use data" option).
+2. After confirming your email, open your account → **API key**, and copy it.
+3. In the app: Settings → **Bus Open Data key** → paste → Done.
+
+The app asks the government feed directly. If your phone's browser blocks that, the map says so, and the bus relay (below) passes it through instead. The key is stored only on your phone, never in this repository.
+
 ## How it decides what to show
 
 | You're nearest to | Stop used | Shows |
