@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#123a45">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Workday</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-title" content="Workday">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Barlow+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: map pinned at top, three stacked panels below (buses, weather, work log) — one column, thumb-first */
+:root{
+  --bg:#f3f5f4; --surface:#ffffff; --ink:#14232a; --muted:#5b6c72; --line:#d9e1e1;
+  --harbour:#123a45; --accent:#e8a33c; --accent-ink:#3d2600;
+  --rain:#2f7fd1; --good:#2e8a57; --late:#c4492f; --on:#2e8a57;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0d171b; --surface:#152329; --ink:#e7eeef; --muted:#93a6ab; --line:#26383f;
+  --harbour:#0a2229; --accent:#f0b354; --accent-ink:#2b1a00;
+  --rain:#6fb0ff; --good:#5cc489; --late:#ff7d61; --on:#5cc489; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0d171b; --surface:#152329; --ink:#e7eeef; --muted:#93a6ab; --line:#26383f;
+  --harbour:#0a2229; --accent:#f0b354; --accent-ink:#2b1a00;
+  --rain:#6fb0ff; --good:#5cc489; --late:#ff7d61; --on:#5cc489; color-scheme:dark}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 var(--body);
+  padding-bottom:env(safe-area-inset-bottom,0px);-webkit-text-size-adjust:100%}
+button,input,select{font:inherit;color:inherit}
+.num{font-variant-numeric:tabular-nums}
+
+header{background:var(--harbour);color:#fff;display:flex;align-items:center;gap:12px;
+  padding-top:calc(10px + env(safe-area-inset-top,0px));padding-bottom:10px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header h1{font:700 22px/1 var(--display);letter-spacing:.04em;text-transform:uppercase;margin:0}
+#where{font-size:13px;opacity:.85;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.icon-btn{background:transparent;border:1px solid rgba(255,255,255,.35);border-radius:8px;color:#fff;padding:6px 10px;cursor:pointer}
+
+#mapwrap{position:relative;height:46vh;min-height:280px;max-height:520px}
+#map{position:absolute;inset:0;background:var(--line)}
+.chips{position:absolute;top:10px;left:10px;right:10px;z-index:500;display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+.chip{pointer-events:auto;border:0;border-radius:999px;padding:7px 12px;background:var(--surface);color:var(--ink);
+  box-shadow:0 1px 4px rgba(0,0,0,.25);font-weight:700;font-size:13px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.mapmsg{position:absolute;left:10px;right:10px;bottom:62px;z-index:500;background:var(--surface);color:var(--ink);border-radius:10px;padding:7px 10px;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.timebar{position:absolute;left:10px;right:10px;bottom:10px;z-index:500;background:var(--surface);border-radius:12px;
+  padding:8px 12px;box-shadow:0 1px 6px rgba(0,0,0,.3);display:flex;align-items:center;gap:10px}
+.timebar input{flex:1;min-width:0;accent-color:var(--accent)}
+.timebar .t{font:600 18px/1 var(--display);min-width:64px;white-space:nowrap;text-align:right}
+.timebar button{border:0;background:var(--harbour);color:#fff;border-radius:8px;width:34px;height:30px;cursor:pointer}
+
+main{display:grid;gap:14px;padding-block:14px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  max-width:760px;margin:0 auto}
+section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;min-width:0}
+section h2{font:700 15px/1.1 var(--display);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 4px}
+.stopname{font:700 26px/1.1 var(--display);margin:0 0 10px;text-wrap:balance}
+.note{font-size:13px;color:var(--muted);margin:8px 0 0}
+.note.warn{color:var(--late)}
+
+/* departure board */
+.board{display:grid;gap:0;margin:0;padding:0;list-style:none}
+.board li{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.board li:first-child{border-top:0}
+.route{font:700 20px/1 var(--display);background:var(--harbour);color:#fff;border-radius:6px;text-align:center;padding:6px 0}
+.dest{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dest small{display:block;color:var(--muted);font-size:12px}
+.due{text-align:right}
+.due b{font:700 24px/1 var(--display);display:block}
+.due span{font-size:12px;color:var(--muted)}
+.due .live{color:var(--good)} .due .late{color:var(--late)}
+
+/* weather */
+.wx-now{display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
+.wx-now .big{font:700 34px/1 var(--display)}
+.chart{width:100%;height:auto;display:block}
+.chart text{fill:var(--muted);font:11px var(--body)}
+
+/* work log */
+.timer{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+#workBtn{border:0;border-radius:999px;width:96px;height:96px;font:700 22px/1 var(--display);letter-spacing:.06em;
+  text-transform:uppercase;cursor:pointer;background:var(--harbour);color:#fff;box-shadow:0 2px 0 rgba(0,0,0,.25);flex:none}
+#workBtn.on{background:var(--on);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 10px color-mix(in srgb,var(--on) 25%,transparent)}}
+@media (prefers-reduced-motion:reduce){#workBtn.on{animation:none}}
+.clock{font:700 40px/1 var(--display)}
+.sub{color:var(--muted);font-size:13px}
+.weekhead{display:flex;align-items:center;justify-content:space-between;margin:16px 0 4px;gap:8px}
+.weekhead b{font:700 18px/1 var(--display)}
+.weekhead button{border:1px solid var(--line);background:transparent;border-radius:8px;width:36px;height:32px;cursor:pointer}
+.sessions{list-style:none;margin:8px 0 0;padding:0;font-size:13px}
+.sessions li{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.sessions button{border:0;background:transparent;color:var(--late);cursor:pointer;font-size:13px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.btn{border:1px solid var(--line);background:transparent;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px}
+
+dialog{border:0;border-radius:14px;background:var(--surface);color:var(--ink);width:min(92vw,440px);padding:18px}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog label{display:block;font-weight:700;margin:12px 0 4px}
+dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+
+/* map markers */
+.me-dot{width:16px;height:16px;border-radius:50%;background:#2f7fd1;border:3px solid #fff;box-shadow:0 0 0 2px rgba(47,127,209,.4)}
+.stop-pin{background:var(--accent);color:var(--accent-ink);font:700 12px/1 var(--display);padding:4px 6px;border-radius:6px;border:2px solid #fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.bus-pin{background:var(--harbour);color:#fff;font:700 13px/1 var(--display);padding:4px 6px;border-radius:6px;border:2px solid #fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.temp-pin{font:700 13px/1 var(--display);color:#111;text-shadow:0 0 3px #fff,0 0 3px #fff;white-space:nowrap}
+.leaflet-container{font-family:var(--body)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Workday</h1>
+  <div id="where">Finding you…</div>
+  <button class="icon-btn" id="settingsBtn" aria-label="Settings">Settings</button>
+</header>
+
+<div id="mapwrap">
+  <div id="map" role="application" aria-label="Map"></div>
+  <div class="chips">
+    <button class="chip" id="chipBus" aria-pressed="true">Buses</button>
+    <button class="chip" id="chipRain" aria-pressed="true">Rain</button>
+    <button class="chip" id="chipTemp" aria-pressed="true">Temperature</button>
+    <button class="chip" id="chipMe" aria-pressed="false">Centre on me</button>
+  </div>
+  <div class="mapmsg" id="mapMsg" hidden></div>
+  <div class="timebar" id="timebar">
+    <button id="playBtn" aria-label="Play weather timeline">▶</button>
+    <input type="range" id="slider" min="0" max="15" value="6" aria-label="Weather time">
+    <span class="t num" id="sliderLabel">Now</span>
+  </div>
+</div>
+
+<main>
+  <section id="busPanel" aria-live="polite">
+    <h2 id="busHeading">Next buses</h2>
+    <p class="stopname" id="stopName">—</p>
+    <ul class="board" id="board"></ul>
+    <p class="note" id="busNote"></p>
+  </section>
+
+  <section id="wxPanel">
+    <h2>Weather here · last 6 h and next 9 h</h2>
+    <div class="wx-now">
+      <span class="big num" id="wxTemp">–°</span>
+      <span id="wxRain" class="num">– mm rain this hour</span>
+    </div>
+    <svg class="chart" id="wxChart" viewBox="0 0 360 140" role="img" aria-label="Rain and temperature chart"></svg>
+    <p class="note">Bars: rain (mm per hour). Line: temperature. The map overlay uses the same data across the area you're looking at.</p>
+  </section>
+
+  <section id="workPanel">
+    <h2>Work log</h2>
+    <div class="timer">
+      <button id="workBtn" aria-pressed="false">Start</button>
+      <div>
+        <div class="clock num" id="todayTotal">0:00</div>
+        <div class="sub" id="timerSub">Worked today</div>
+      </div>
+    </div>
+    <div class="weekhead">
+      <button id="prevWeek" aria-label="Previous week">‹</button>
+      <div style="text-align:center"><b class="num" id="weekTotal">0 h 00 m</b><div class="sub" id="weekLabel"></div></div>
+      <button id="nextWeek" aria-label="Next week">›</button>
+    </div>
+    <svg class="chart" id="weekChart" viewBox="0 0 360 170" role="img" aria-label="Hours worked each day this week"></svg>
+    <details>
+      <summary class="sub">Today's sessions</summary>
+      <ul class="sessions" id="sessions"></ul>
+    </details>
+    <div class="row">
+      <button class="btn" id="exportBtn">Back up log</button>
+      <label class="btn" for="importFile">Restore backup</label>
+      <input type="file" id="importFile" accept="application/json" hidden>
+    </div>
+  </section>
+</main>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h2 style="margin-top:0">Settings</h2>
+    <label for="relayUrl">Bus relay address</label>
+    <input id="relayUrl" type="url" placeholder="https://workday-bus.yourname.workers.dev">
+    <p class="note">Without this the bus panel shows sample times. See the README for the 5-minute setup.</p>
+    <label for="locOverride">Location</label>
+    <select id="locOverride">
+      <option value="gps">Use my phone's location</option>
+      <option value="dorset">Pretend I'm at Dorset Road</option>
+      <option value="centre">Pretend I'm at The Centre</option>
+      <option value="green">Pretend I'm at College Green</option>
+    </select>
+    <label for="weekGoal">Weekly target (hours)</label>
+    <input id="weekGoal" type="number" min="0" max="80" step="0.5" placeholder="37.5">
+    <div class="row" style="justify-content:flex-end"><button class="btn" value="ok">Done</button></div>
+  </form>
+</dialog>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+if (!window.L) document.getElementById("map").innerHTML =
+  '<p style="padding:20px">The map couldn\'t load, so this page has no internet access. Open the app from its web address (e.g. your GitHub Pages link) in Safari or Chrome, not from a file preview.</p>';
+</script>
+<script>
+"use strict";
+/* ---------- config ---------- */
+const STOPS = {
+  dorset: { atco:"0100BRP92066", name:"Dorset Road South · towards city centre", lat:51.48852, lng:-2.60848,
+            services:["2","2a","Y6"], show:3, mode:"arrivals",
+            // south-bound only: drop anything heading back north
+            notTo:/cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead/i },
+  centre: { atco:"0100BRP90371", name:"The Centre (stop C7)", lat:51.45460, lng:-2.59700,
+            services:["1","2","2a","Y6"], show:6, mode:"departures" },
+  green:  { atco:"0100BRP90327", name:"College Green (stop P1)", lat:51.45185, lng:-2.60060,
+            services:["1","2","2a","Y6"], show:6, mode:"departures" },
+};
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem("workday."+k); return v==null ? d : JSON.parse(v); }catch{ return d; } },
+  set(k, v){ try{ localStorage.setItem("workday."+k, JSON.stringify(v)); }catch{} }
+};
+let relay = store.get("relay", "");
+let locMode = store.get("loc", "gps");
+let weekGoal = store.get("goal", 37.5);
+
+/* ---------- map ---------- */
+const map = L.map("map", { zoomControl:false, attributionControl:true }).setView([51.47, -2.60], 13);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom:19, attribution:'© OpenStreetMap · weather Open-Meteo · buses bustimes.org'
+}).addTo(map);
+const layers = { wx: L.layerGroup().addTo(map), temp: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map) };
+let meMarker = null, me = null, activeKey = null;
+const msgs = {};
+function mapMsg(key, text){ if (text) msgs[key] = text; else delete msgs[key];
+  const el = document.getElementById("mapMsg"), all = Object.values(msgs);
+  el.hidden = !all.length; el.textContent = all.join(" · "); }
+
+for (const [k, s] of Object.entries(STOPS)) {
+  s.marker = L.marker([s.lat, s.lng], { icon: L.divIcon({ className:"", html:`<div class="stop-pin">${k==="dorset"?"Dorset Rd S":k==="centre"?"Centre C7":"College Grn P1"}</div>`, iconAnchor:[30,12] }) })
+    .addTo(layers.stops);
+}
+
+function dist(a, b){ // metres
+  const R=6371e3, toR=x=>x*Math.PI/180;
+  const dLat=toR(b.lat-a.lat), dLng=toR(b.lng-a.lng);
+  const h=Math.sin(dLat/2)**2+Math.cos(toR(a.lat))*Math.cos(toR(b.lat))*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+function fmtDist(m){ return m < 1000 ? `${Math.round(m/10)*10} m` : `${(m/1000).toFixed(1)} km`; }
+
+function setMe(pos, label){
+  const first = !me;
+  me = pos;
+  if (!meMarker) meMarker = L.marker([pos.lat,pos.lng], { icon:L.divIcon({className:"",html:'<div class="me-dot"></div>',iconSize:[16,16],iconAnchor:[8,8]}), zIndexOffset:1000 }).addTo(map);
+  else meMarker.setLatLng([pos.lat,pos.lng]);
+  // pick stop: Dorset Road vs the nearer of Centre / College Green
+  const dD = dist(pos, STOPS.dorset), dC = dist(pos, STOPS.centre), dG = dist(pos, STOPS.green);
+  const key = dD <= Math.min(dC, dG) ? "dorset" : (dC <= dG ? "centre" : "green");
+  document.getElementById("where").textContent = `${label} · ${fmtDist({dorset:dD,centre:dC,green:dG}[key])} from ${key==="dorset"?"Dorset Rd South":key==="centre"?"The Centre":"College Green"}`;
+  if (key !== activeKey) { activeKey = key; loadBuses(); }
+  if (first) map.fitBounds(L.latLngBounds([[pos.lat,pos.lng],[STOPS[key].lat,STOPS[key].lng]]).pad(0.6), { maxZoom:16 });
+}
+
+let watchId = null;
+function startLocation(){
+  if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  if (locMode !== "gps") { const s = STOPS[locMode]; me = null; setMe({lat:s.lat+0.0006, lng:s.lng+0.0004}, "Pretend location"); return; }
+  if (!("geolocation" in navigator)) { document.getElementById("where").textContent = "Location not available"; return fallbackLoc(); }
+  watchId = navigator.geolocation.watchPosition(
+    p => setMe({lat:p.coords.latitude, lng:p.coords.longitude}, "You"),
+    () => { document.getElementById("where").textContent = "Location blocked — using Dorset Road"; fallbackLoc(); },
+    { enableHighAccuracy:true, maximumAge:30000, timeout:15000 });
+}
+function fallbackLoc(){ const s = STOPS.dorset; setMe({lat:s.lat, lng:s.lng}, "Location off"); }
+
+document.getElementById("chipMe").onclick = () => { if (me) map.setView([me.lat, me.lng], 16); };
+
+/* ---------- buses ---------- */
+const board = document.getElementById("board"), busNote = document.getElementById("busNote");
+let busTimer = null, vehTimer = null;
+
+function minutesUntil(hhmm){
+  const [h,m] = hhmm.split(":").map(Number), now = new Date(), t = new Date(now);
+  t.setHours(h, m, 0, 0);
+  let diff = (t - now) / 60000;
+  if (diff < -120) diff += 1440;            // after midnight
+  return Math.round(diff);
+}
+function sampleDepartures(stop){
+  const now = new Date(), out = [];
+  const svc = stop.services;
+  for (let i = 0; i < 8; i++) {
+    const t = new Date(now.getTime() + (4 + i*7) * 60000);
+    const hh = String(t.getHours()).padStart(2,"0") + ":" + String(t.getMinutes()).padStart(2,"0");
+    const s = svc[i % svc.length];
+    out.push({ service: s, destination: stop.mode==="arrivals" ? (s==="Y6" ? "Bristol Bus Station" : "Stockwood") : "Cribbs Causeway", scheduled: hh, expected: i<2 ? hh : null });
+  }
+  return out;
+}
+
+async function loadBuses(){
+  clearInterval(busTimer); clearInterval(vehTimer);
+  const stop = STOPS[activeKey];
+  document.getElementById("busHeading").textContent = stop.mode === "arrivals" ? "Next 3 south-bound buses" : "Departures · 1, 2, 2a, Y6";
+  document.getElementById("stopName").textContent = stop.name;
+  await refreshDepartures();
+  busTimer = setInterval(refreshDepartures, 30000);
+  refreshVehicles(); vehTimer = setInterval(refreshVehicles, 20000);
+}
+
+async function refreshDepartures(){
+  if (document.hidden) return;
+  const stop = STOPS[activeKey];
+  let deps, sample = false, err = "";
+  if (relay) {
+    try {
+      const r = await fetch(`${relay.replace(/\/$/,"")}/departures?stop=${stop.atco}`);
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      deps = d.departures || [];
+      if (d.lat && d.lng) { stop.lat = d.lat; stop.lng = d.lng; stop.marker.setLatLng([d.lat, d.lng]); }
+    } catch (e) { err = e.message; deps = sampleDepartures(stop); sample = true; }
+  } else { deps = sampleDepartures(stop); sample = true; }
+
+  const want = new Set(stop.services.map(s => s.toLowerCase()));
+  const rows = deps.filter(d => want.has(String(d.service).toLowerCase()))
+    .filter(d => !(stop.notTo && stop.notTo.test(d.destination || "")))
+    .map(d => ({ ...d, mins: minutesUntil(d.expected || d.scheduled) }))
+    .filter(d => d.mins >= -1).slice(0, stop.show);
+
+  board.innerHTML = "";
+  if (!rows.length) board.innerHTML = `<li><span></span><span class="dest">No ${[...stop.services].join(", ")} buses listed right now.</span><span></span></li>`;
+  for (const d of rows) {
+    const li = document.createElement("li");
+    const live = !!d.expected, late = live && d.expected !== d.scheduled && minutesUntil(d.expected) > minutesUntil(d.scheduled);
+    const dueTxt = d.mins <= 0 ? "Due" : `${d.mins} min`;
+    li.innerHTML = `<span class="route"></span><span class="dest"><span class="d"></span><small></small></span>
+      <span class="due"><b class="num ${live ? (late ? "late" : "live") : ""}">${dueTxt}</b><span class="num"></span></span>`;
+    li.querySelector(".route").textContent = d.service;
+    li.querySelector(".d").textContent = d.destination;
+    li.querySelector("small").textContent = live ? (late ? `Running late · timetable ${d.scheduled}` : "Live tracking") : "Timetable time";
+    li.querySelector(".due span").textContent = d.expected || d.scheduled;
+    board.appendChild(li);
+  }
+  busNote.className = "note" + (sample ? " warn" : "");
+  busNote.textContent = sample
+    ? (err ? `Couldn't reach your bus relay (${err}). Showing sample times.` : "Sample times — add your bus relay in Settings to see real buses.")
+    : `Updated ${new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})} · green = live tracked`;
+}
+
+async function refreshVehicles(){
+  layers.bus.clearLayers();
+  if (!relay) { mapMsg("bus", "Live bus positions need the bus relay: Settings"); return; }
+  if (document.hidden) return;
+  const stop = STOPS[activeKey];
+  // Dorset Road South: south-bound buses approach from the north, so look only north of the stop.
+  const box = activeKey === "dorset"
+    ? { xmin: stop.lng-0.06, xmax: stop.lng+0.04, ymin: stop.lat, ymax: stop.lat+0.06 }
+    : { xmin: stop.lng-0.05, xmax: stop.lng+0.05, ymin: stop.lat-0.04, ymax: stop.lat+0.03 };
+  try {
+    const r = await fetch(`${relay.replace(/\/$/,"")}/vehicles?xmin=${box.xmin}&ymin=${box.ymin}&xmax=${box.xmax}&ymax=${box.ymax}`);
+    const d = await r.json();
+    const want = new Set(stop.services.map(s => s.toLowerCase()));
+    for (const v of d.vehicles || []) {
+      if (!want.has(v.service.toLowerCase())) continue;
+      if (activeKey === "dorset") {
+        // keep only buses heading south (compass 100°–260°) that haven't reached the stop yet
+        if (v.heading == null || v.heading < 100 || v.heading > 260) continue;
+        if (stop.notTo.test(v.destination || "")) continue;
+        if (v.lat < stop.lat) continue;
+      }
+      L.marker([v.lat, v.lng], { icon: L.divIcon({ className:"", html:`<div class="bus-pin">${v.service}</div>`, iconAnchor:[14,12] }) })
+        .bindPopup(`<b>${v.service}</b> to ${v.destination || "?"}`).addTo(layers.bus);
+    }
+    mapMsg("bus", layers.bus.getLayers().length ? null : (activeKey==="dorset" ? "No south-bound buses on their way right now" : "No 1, 2, 2a or Y6 buses nearby right now"));
+  } catch { mapMsg("bus", "Couldn't reach the bus relay"); }
+}
+
+/* ---------- weather (Open-Meteo, grid over the visible map) ---------- */
+let wx = null, wxIdx = 6, playTimer = null;
+const slider = document.getElementById("slider"), sliderLabel = document.getElementById("sliderLabel");
+
+async function loadWeather(){
+  const b = map.getBounds(), N = 5;
+  const lats = [], lngs = [], cells = [];
+  const dLat = (b.getNorth()-b.getSouth())/N, dLng = (b.getEast()-b.getWest())/N;
+  for (let i=0;i<N;i++) for (let j=0;j<N;j++) {
+    const lat = b.getSouth()+dLat*(i+.5), lng = b.getWest()+dLng*(j+.5);
+    lats.push(lat.toFixed(3)); lngs.push(lng.toFixed(3)); // ~100 m grid
+    cells.push({ bounds: [[lat-dLat/2,lng-dLng/2],[lat+dLat/2,lng+dLng/2]], lat, lng });
+  }
+  const here = me || map.getCenter();
+  lats.push(here.lat.toFixed(2)); lngs.push(here.lng.toFixed(2)); // your spot, rounded to ~1 km for privacy
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=temperature_2m,precipitation&past_hours=6&forecast_hours=9&timezone=Europe%2FLondon`;
+  try {
+    const r = await fetch(url); let d = await r.json(); if (!Array.isArray(d)) d = [d];
+    const times = d[0].hourly.time;
+    const nowKey = new Date().toLocaleString("sv-SE",{timeZone:"Europe/London"}).slice(0,13).replace(" ","T");
+    const nowIdx = Math.max(0, times.findIndex(t => t.startsWith(nowKey)));
+    wx = { times, nowIdx, cells: cells.map((c,k)=>({ ...c, t:d[k].hourly.temperature_2m, p:d[k].hourly.precipitation })),
+           here: { t: d[d.length-1].hourly.temperature_2m, p: d[d.length-1].hourly.precipitation } };
+    slider.max = times.length - 1;
+    if (!playTimer) { wxIdx = nowIdx; slider.value = wxIdx; }
+    drawWeather(); drawWxChart();
+    mapMsg("wx", null);
+  } catch (e) {
+    sliderLabel.textContent = "No data";
+    document.getElementById("wxRain").textContent = "Couldn't load the weather. Check you're online and opening the app in your browser.";
+    mapMsg("wx", "Weather couldn't load");
+  }
+}
+function rainColour(mm){
+  if (mm < 0.1) return null;
+  if (mm < 0.5) return ["#8fc4ff",.35]; if (mm < 2) return ["#3d8fe6",.45];
+  if (mm < 5) return ["#1f5fd1",.55]; return ["#7a3fd1",.6];
+}
+function tempColour(c){ // cold blue -> mild green -> warm orange
+  const stops = [[-5,[70,90,200]],[5,[80,170,220]],[12,[110,190,120]],[20,[240,190,70]],[30,[220,80,50]]];
+  for (let i=1;i<stops.length;i++) if (c <= stops[i][0]) {
+    const [a,ca]=stops[i-1],[b,cb]=stops[i], f=Math.max(0,(c-a)/(b-a));
+    return `rgb(${ca.map((v,k)=>Math.round(v+(cb[k]-v)*f)).join(",")})`;
+  }
+  return "rgb(220,80,50)";
+}
+function drawWeather(){
+  if (!wx) return;
+  layers.wx.clearLayers(); layers.temp.clearLayers();
+  const i = wxIdx, off = i - wx.nowIdx;
+  sliderLabel.textContent = off === 0 ? "Now" : (off > 0 ? `+${off} h` : `${off} h`);
+  sliderLabel.title = wx.times[i].slice(11);
+  if (!wx.cells.some(c => c.p[i] >= 0.1)) sliderLabel.textContent += " · dry";
+  for (const c of wx.cells) {
+    const rc = rainColour(c.p[i]);
+    if (rc) L.rectangle(c.bounds, { stroke:false, fillColor:rc[0], fillOpacity:rc[1], interactive:false }).addTo(layers.wx);
+    L.rectangle(c.bounds, { stroke:false, fillColor:tempColour(c.t[i]), fillOpacity:.28, interactive:false }).addTo(layers.temp);
+    L.marker([c.lat,c.lng], { icon:L.divIcon({ className:"", html:`<div class="temp-pin">${Math.round(c.t[i])}°</div>`, iconAnchor:[10,8] }), interactive:false }).addTo(layers.temp);
+  }
+}
+function drawWxChart(){
+  const svg = document.getElementById("wxChart"), h = wx.here, n = h.t.length;
+  const W=360, H=140, L0=28, R0=28, T0=10, B0=24, cw=(W-L0-R0)/n;
+  const pMax = Math.max(2, ...h.p), tMin = Math.floor(Math.min(...h.t))-1, tMax = Math.ceil(Math.max(...h.t))+1;
+  const y = v => T0 + (H-T0-B0) * (1 - (v-tMin)/(tMax-tMin));
+  let s = `<line x1="${L0}" x2="${W-R0}" y1="${H-B0}" y2="${H-B0}" stroke="var(--line)"/>`;
+  const nx = L0 + cw*wx.nowIdx;
+  s += `<rect x="${nx}" y="${T0}" width="${cw}" height="${H-T0-B0}" fill="var(--accent)" opacity=".18"/>`;
+  h.p.forEach((p,k)=>{ const bh=(H-T0-B0)*p/pMax; if (p>0) s+=`<rect x="${L0+cw*k+2}" y="${H-B0-bh}" width="${cw-4}" height="${bh}" rx="2" fill="var(--rain)"/>`; });
+  s += `<polyline fill="none" stroke="var(--late)" stroke-width="2.2" points="${h.t.map((t,k)=>`${L0+cw*(k+.5)},${y(t)}`).join(" ")}"/>`;
+  s += `<circle cx="${L0+cw*(wx.nowIdx+.5)}" cy="${y(h.t[wx.nowIdx])}" r="4" fill="var(--late)"/>`;
+  s += `<text x="${L0-4}" y="${y(tMax)+4}" text-anchor="end">${tMax}°</text><text x="${L0-4}" y="${y(tMin)}" text-anchor="end">${tMin}°</text>`;
+  s += `<text x="${W-R0+4}" y="${T0+8}">${pMax.toFixed(0)}mm</text>`;
+  [0, wx.nowIdx, n-1].forEach(k => s += `<text x="${L0+cw*(k+.5)}" y="${H-6}" text-anchor="middle">${k===wx.nowIdx?"Now":wx.times[k].slice(11,16)}</text>`);
+  svg.innerHTML = s;
+  document.getElementById("wxTemp").textContent = `${Math.round(h.t[wx.nowIdx])}°C`;
+  document.getElementById("wxRain").textContent = `${h.p[wx.nowIdx].toFixed(1)} mm rain this hour · ${h.p.slice(wx.nowIdx+1).reduce((a,b)=>a+b,0).toFixed(1)} mm due in next 9 h`;
+}
+slider.oninput = () => { wxIdx = +slider.value; drawWeather(); };
+document.getElementById("playBtn").onclick = e => {
+  if (playTimer) { clearInterval(playTimer); playTimer = null; e.target.textContent = "▶"; return; }
+  e.target.textContent = "❚❚";
+  playTimer = setInterval(() => { wxIdx = (wxIdx + 1) % (+slider.max + 1); slider.value = wxIdx; drawWeather(); }, 700);
+};
+function toggleChip(id, layer){
+  const b = document.getElementById(id);
+  b.onclick = () => { const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", on);
+    on ? layer.addTo(map) : map.removeLayer(layer);
+    document.getElementById("timebar").hidden = !(map.hasLayer(layers.wx) || map.hasLayer(layers.temp)); };
+}
+toggleChip("chipRain", layers.wx); toggleChip("chipTemp", layers.temp); toggleChip("chipBus", layers.bus);
+let wxDebounce; map.on("moveend", () => { clearTimeout(wxDebounce); wxDebounce = setTimeout(loadWeather, 800); });
+setInterval(loadWeather, 15 * 60000);
+
+/* ---------- work log ---------- */
+// sessions: [{s: startMs, e: endMs|null}]
+let sessions = store.get("sessions", []);
+let weekOffset = 0;
+const workBtn = document.getElementById("workBtn");
+const running = () => sessions.length && sessions[sessions.length-1].e == null;
+const save = () => store.set("sessions", sessions);
+
+function dayStart(d){ const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function weekStart(off){ const d = dayStart(new Date()); const dow = (d.getDay()+6)%7; d.setDate(d.getDate()-dow+off*7); return d; }
+function workedBetween(a, b){ // ms worked in [a,b)
+  const now = Date.now(); let t = 0;
+  for (const s of sessions) { const e = s.e ?? now; t += Math.max(0, Math.min(e, b) - Math.max(s.s, a)); }
+  return t;
+}
+const hm = ms => { const m = Math.floor(ms/60000); return `${Math.floor(m/60)}:${String(m%60).padStart(2,"0")}`; };
+const hmLong = ms => { const m = Math.round(ms/60000); return `${Math.floor(m/60)} h ${String(m%60).padStart(2,"0")} m`; };
+
+workBtn.onclick = () => {
+  if (running()) sessions[sessions.length-1].e = Date.now();
+  else sessions.push({ s: Date.now(), e: null });
+  save(); renderWork();
+};
+
+function renderWork(){
+  const on = running();
+  workBtn.classList.toggle("on", on); workBtn.textContent = on ? "Stop" : "Start"; workBtn.setAttribute("aria-pressed", on);
+  const t0 = dayStart(new Date()).getTime();
+  document.getElementById("todayTotal").textContent = hm(workedBetween(t0, t0 + 864e5));
+  document.getElementById("timerSub").textContent = on
+    ? `Logging since ${new Date(sessions[sessions.length-1].s).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}`
+    : "Worked today";
+
+  // week chart
+  const ws = weekStart(weekOffset), days = [];
+  for (let i=0;i<7;i++){ const a = new Date(ws); a.setDate(a.getDate()+i); const b = new Date(a); b.setDate(b.getDate()+1); days.push({ a, ms: workedBetween(a.getTime(), b.getTime()) }); }
+  const total = days.reduce((x,d)=>x+d.ms,0);
+  document.getElementById("weekTotal").textContent = hmLong(total);
+  const we = new Date(ws); we.setDate(we.getDate()+6);
+  const f = d => d.toLocaleDateString("en-GB",{day:"numeric",month:"short"});
+  document.getElementById("weekLabel").textContent = `${weekOffset===0?"This week":weekOffset===-1?"Last week":"Week"} · ${f(ws)} – ${f(we)}${weekGoal?` · target ${weekGoal} h`:""}`;
+  document.getElementById("nextWeek").disabled = weekOffset >= 0;
+
+  const svg = document.getElementById("weekChart"), W=360, H=170, L0=26, B0=34, T0=16;
+  const maxH = Math.max(8, Math.ceil(Math.max(...days.map(d=>d.ms/36e5))));
+  const bw = (W-L0-8)/7, y = h => T0 + (H-T0-B0)*(1-h/maxH);
+  let s = "";
+  for (let g=0; g<=maxH; g+= maxH>10?4:2) s += `<line x1="${L0}" x2="${W-4}" y1="${y(g)}" y2="${y(g)}" stroke="var(--line)"/><text x="${L0-5}" y="${y(g)+4}" text-anchor="end">${g}h</text>`;
+  if (weekGoal) { const dl = weekGoal/5; if (dl <= maxH) s += `<line x1="${L0}" x2="${W-4}" y1="${y(dl)}" y2="${y(dl)}" stroke="var(--accent)" stroke-dasharray="4 4"/>`; }
+  const todayKey = dayStart(new Date()).getTime();
+  days.forEach((d,i)=>{
+    const h = d.ms/36e5, x = L0 + bw*i + 6, isToday = d.a.getTime() === todayKey;
+    if (h > 0) s += `<rect x="${x}" y="${y(h)}" width="${bw-12}" height="${y(0)-y(h)}" rx="3" fill="${isToday?"var(--accent)":"var(--harbour)"}" ${isToday?"":'opacity=".85"'}/>`;
+    if (h > 0) s += `<text x="${x+(bw-12)/2}" y="${y(h)-4}" text-anchor="middle" style="fill:var(--ink)">${hm(d.ms)}</text>`;
+    s += `<text x="${x+(bw-12)/2}" y="${H-16}" text-anchor="middle" style="${isToday?"fill:var(--ink);font-weight:700":""}">${d.a.toLocaleDateString("en-GB",{weekday:"short"})}</text>`;
+    s += `<text x="${x+(bw-12)/2}" y="${H-3}" text-anchor="middle">${d.a.getDate()}</text>`;
+  });
+  svg.innerHTML = s;
+
+  // today's sessions
+  const ul = document.getElementById("sessions"); ul.innerHTML = "";
+  const tf = ms => new Date(ms).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+  sessions.forEach((x, idx) => {
+    if ((x.e ?? Date.now()) < t0) return;
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="num">${tf(x.s)} – ${x.e?tf(x.e):"now"} · ${hm((x.e??Date.now())-x.s)}</span>`;
+    if (x.e) { const b = document.createElement("button"); b.textContent = "Remove"; b.onclick = () => { sessions.splice(idx,1); save(); renderWork(); }; li.appendChild(b); }
+    ul.appendChild(li);
+  });
+  if (!ul.children.length) ul.innerHTML = `<li><span class="sub">Nothing logged today yet.</span></li>`;
+}
+document.getElementById("prevWeek").onclick = () => { weekOffset--; renderWork(); };
+document.getElementById("nextWeek").onclick = () => { if (weekOffset < 0) weekOffset++; renderWork(); };
+setInterval(() => { if (running()) renderWork(); }, 20000);
+
+document.getElementById("exportBtn").onclick = () => {
+  const blob = new Blob([JSON.stringify({ sessions, exported: new Date().toISOString() }, null, 1)], { type:"application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `workday-log-${new Date().toISOString().slice(0,10)}.json`; a.click();
+};
+document.getElementById("importFile").onchange = async e => {
+  try { const d = JSON.parse(await e.target.files[0].text()); if (Array.isArray(d.sessions)) { sessions = d.sessions; save(); renderWork(); } } catch {}
+};
+
+/* ---------- settings ---------- */
+const dlg = document.getElementById("settings");
+document.getElementById("settingsBtn").onclick = () => {
+  document.getElementById("relayUrl").value = relay;
+  document.getElementById("locOverride").value = locMode;
+  document.getElementById("weekGoal").value = weekGoal || "";
+  dlg.showModal();
+};
+dlg.addEventListener("close", () => {
+  relay = document.getElementById("relayUrl").value.trim(); store.set("relay", relay);
+  const nl = document.getElementById("locOverride").value;
+  weekGoal = parseFloat(document.getElementById("weekGoal").value) || 0; store.set("goal", weekGoal);
+  if (nl !== locMode) { locMode = nl; store.set("loc", nl); activeKey = null; startLocation(); } else loadBuses();
+  renderWork();
+});
+document.addEventListener("visibilitychange", () => { if (!document.hidden && activeKey) { refreshDepartures(); refreshVehicles(); renderWork(); } });
+
+/* Google Health: planned. Daily step/sleep data could sit beside the week chart later. */
+
+renderWork();
+loadWeather();
+startLocation();
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
