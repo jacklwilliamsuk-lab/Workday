@@ -115,7 +115,14 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
 .me-dot{width:16px;height:16px;border-radius:50%;background:#2f7fd1;border:3px solid #fff;box-shadow:0 0 0 2px rgba(47,127,209,.4)}
 .stop-pin{background:var(--accent);color:var(--accent-ink);font:700 12px/1 var(--display);padding:4px 6px;border-radius:6px;border:2px solid #fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)}
 .bus-pin{background:var(--harbour);color:#fff;font:700 13px/1 var(--display);padding:4px 6px;border-radius:6px;border:2px solid #fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)}
-.temp-pin{font:700 13px/1 var(--display);color:#111;text-shadow:0 0 3px #fff,0 0 3px #fff;white-space:nowrap}
+.temp-pin{font:700 14px/1 var(--display);color:#111;text-shadow:0 0 3px #fff,0 0 3px #fff;white-space:nowrap;display:flex;align-items:center;gap:2px}
+.temp-pin .sym{font-size:20px;line-height:1;text-shadow:none}
+.isobar-lbl{font:600 11px/1 var(--display);color:#3a3f8f;background:rgba(255,255,255,.85);padding:1px 3px;border-radius:3px;white-space:nowrap}
+.pcentre{font:700 22px/1 var(--display);text-shadow:0 0 3px #fff,0 0 3px #fff;text-align:center;white-space:nowrap}
+.pcentre small{display:block;font-size:11px}
+.pcentre.hi{color:#1f5fd1} .pcentre.lo{color:#c4492f}
+#testOut{white-space:pre-wrap;font-size:12px;background:var(--bg);border-radius:8px;padding:8px;margin:8px 0 0;max-height:200px;overflow:auto}
+.wxlinks a{color:var(--rain);font-weight:700}
 .leaflet-container{font-family:var(--body)}
 </style>
 </head>
@@ -132,7 +139,8 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
   <div class="chips">
     <button class="chip" id="chipBus" aria-pressed="true">Buses</button>
     <button class="chip" id="chipRain" aria-pressed="true">Rain</button>
-    <button class="chip" id="chipTemp" aria-pressed="true">Temperature</button>
+    <button class="chip" id="chipTemp" aria-pressed="true">Weather</button>
+    <button class="chip" id="chipIso" aria-pressed="false">Isobars</button>
     <button class="chip" id="chipMe" aria-pressed="false">Centre on me</button>
   </div>
   <div class="mapmsg" id="mapMsg" hidden></div>
@@ -159,6 +167,7 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
     </div>
     <svg class="chart" id="wxChart" viewBox="0 0 360 140" role="img" aria-label="Rain and temperature chart"></svg>
     <p class="note">Bars: rain (mm per hour). Line: temperature. The map overlay uses the same data across the area you're looking at.</p>
+    <p class="note wxlinks">Isobars (every 4 hPa) and H/L pressure centres: tap <b>Isobars</b> on the map. Warm and cold fronts: <a href="https://www.metoffice.gov.uk/weather/maps-and-charts/surface-pressure" target="_blank" rel="noopener">Met Office fronts chart</a>.</p>
   </section>
 
   <section id="workPanel">
@@ -197,6 +206,8 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
     <label for="bodsKey">Bus Open Data key (live buses on the map)</label>
     <input id="bodsKey" type="text" autocomplete="off" spellcheck="false" placeholder="From data.bus-data.dft.gov.uk">
     <p class="note">Free from the government's Bus Open Data Service. Stored only on this phone.</p>
+    <button type="button" class="btn" id="testBuses" style="margin-top:8px">Test live buses</button>
+    <pre id="testOut" hidden></pre>
     <label for="locOverride">Location</label>
     <select id="locOverride">
       <option value="gps">Use my phone's location</option>
@@ -242,7 +253,7 @@ const map = L.map("map", { zoomControl:false, attributionControl:true }).setView
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom:19, attribution:'© OpenStreetMap · weather Open-Meteo · buses Bus Open Data Service / bustimes.org'
 }).addTo(map);
-const layers = { wx: L.layerGroup().addTo(map), temp: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map) };
+const layers = { wx: L.layerGroup().addTo(map), temp: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map), iso: L.layerGroup() };
 let meMarker = null, me = null, activeKey = null;
 const msgs = {};
 function mapMsg(key, text){ if (text) msgs[key] = text; else delete msgs[key];
@@ -447,13 +458,13 @@ async function loadWeather(){
   }
   const here = me || map.getCenter();
   lats.push(here.lat.toFixed(2)); lngs.push(here.lng.toFixed(2)); // your spot, rounded to ~1 km for privacy
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=temperature_2m,precipitation&past_hours=6&forecast_hours=9&timezone=Europe%2FLondon`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=temperature_2m,precipitation,weather_code,is_day&past_hours=6&forecast_hours=9&timezone=Europe%2FLondon`;
   try {
     const r = await fetch(url); let d = await r.json(); if (!Array.isArray(d)) d = [d];
     const times = d[0].hourly.time;
     const nowKey = new Date().toLocaleString("sv-SE",{timeZone:"Europe/London"}).slice(0,13).replace(" ","T");
     const nowIdx = Math.max(0, times.findIndex(t => t.startsWith(nowKey)));
-    wx = { times, nowIdx, cells: cells.map((c,k)=>({ ...c, t:d[k].hourly.temperature_2m, p:d[k].hourly.precipitation })),
+    wx = { times, nowIdx, cells: cells.map((c,k)=>({ ...c, t:d[k].hourly.temperature_2m, p:d[k].hourly.precipitation, w:d[k].hourly.weather_code, day:d[k].hourly.is_day })),
            here: { t: d[d.length-1].hourly.temperature_2m, p: d[d.length-1].hourly.precipitation } };
     slider.max = times.length - 1;
     if (!playTimer) { wxIdx = nowIdx; slider.value = wxIdx; }
@@ -489,7 +500,7 @@ function drawWeather(){
     const rc = rainColour(c.p[i]);
     if (rc) L.rectangle(c.bounds, { stroke:false, fillColor:rc[0], fillOpacity:rc[1], interactive:false }).addTo(layers.wx);
     L.rectangle(c.bounds, { stroke:false, fillColor:tempColour(c.t[i]), fillOpacity:.28, interactive:false }).addTo(layers.temp);
-    L.marker([c.lat,c.lng], { icon:L.divIcon({ className:"", html:`<div class="temp-pin">${Math.round(c.t[i])}°</div>`, iconAnchor:[10,8] }), interactive:false }).addTo(layers.temp);
+    L.marker([c.lat,c.lng], { icon:L.divIcon({ className:"", html:`<div class="temp-pin"><span class="sym">${wxSymbol(c.w?.[i], c.day?.[i])}</span>${Math.round(c.t[i])}°</div>`, iconAnchor:[22,10] }), interactive:false }).addTo(layers.temp);
   }
 }
 function drawWxChart(){
@@ -510,19 +521,138 @@ function drawWxChart(){
   document.getElementById("wxTemp").textContent = `${Math.round(h.t[wx.nowIdx])}°C`;
   document.getElementById("wxRain").textContent = `${h.p[wx.nowIdx].toFixed(1)} mm rain this hour · ${h.p.slice(wx.nowIdx+1).reduce((a,b)=>a+b,0).toFixed(1)} mm due in next 9 h`;
 }
-slider.oninput = () => { wxIdx = +slider.value; drawWeather(); };
+slider.oninput = () => { wxIdx = +slider.value; drawWeather(); drawIsobars(); };
 document.getElementById("playBtn").onclick = e => {
   if (playTimer) { clearInterval(playTimer); playTimer = null; e.target.textContent = "▶"; return; }
   e.target.textContent = "❚❚";
-  playTimer = setInterval(() => { wxIdx = (wxIdx + 1) % (+slider.max + 1); slider.value = wxIdx; drawWeather(); }, 700);
+  playTimer = setInterval(() => { wxIdx = (wxIdx + 1) % (+slider.max + 1); slider.value = wxIdx; drawWeather(); drawIsobars(); }, 700);
 };
 function toggleChip(id, layer){
   const b = document.getElementById(id);
   b.onclick = () => { const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", on);
     on ? layer.addTo(map) : map.removeLayer(layer);
-    document.getElementById("timebar").hidden = !(map.hasLayer(layers.wx) || map.hasLayer(layers.temp)); };
+    document.getElementById("timebar").hidden = !(map.hasLayer(layers.wx) || map.hasLayer(layers.temp) || map.hasLayer(layers.iso)); };
 }
 toggleChip("chipRain", layers.wx); toggleChip("chipTemp", layers.temp); toggleChip("chipBus", layers.bus);
+
+function wxSymbol(code, day){
+  if (code == null) return "";
+  if (code === 0) return day ? "☀️" : "🌙";
+  if (code <= 2) return day ? "🌤️" : "☁️";
+  if (code === 3) return "☁️";
+  if (code === 45 || code === 48) return "🌫️";
+  if (code >= 51 && code <= 57) return "🌦️";
+  if (code >= 61 && code <= 67) return "🌧️";
+  if (code >= 71 && code <= 77) return "🌨️";
+  if (code >= 80 && code <= 82) return "🌦️";
+  if (code >= 85 && code <= 86) return "🌨️";
+  if (code >= 95) return "⛈️";
+  return "";
+}
+
+/* ---------- isobars: UK & Ireland pressure grid from Open-Meteo, contoured every 4 hPa ---------- */
+const SYN = { lat0:47, lat1:62, lng0:-14, lng1:6, step:1 };
+let syn = null, synLoading = false;
+async function loadSynoptic(){
+  if (synLoading) return; synLoading = true;
+  const lats = [], lngs = [];
+  const ny = (SYN.lat1-SYN.lat0)/SYN.step+1, nx = (SYN.lng1-SYN.lng0)/SYN.step+1;
+  for (let j=0;j<ny;j++) for (let i=0;i<nx;i++) { lats.push(SYN.lat0+j*SYN.step); lngs.push(SYN.lng0+i*SYN.step); }
+  try {
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}&longitude=${lngs.join(",")}&hourly=pressure_msl&past_hours=6&forecast_hours=9&timezone=Europe%2FLondon`);
+    const d = await r.json();
+    syn = { nx, ny, times: d[0].hourly.time, p: d.map(x => x.hourly.pressure_msl) };
+    mapMsg("iso", null);
+    drawIsobars();
+  } catch { mapMsg("iso", "Isobars couldn't load"); }
+  synLoading = false;
+}
+function synGrid(t){ // smoothed grid at time t, 4x finer than the 1° data
+  const { nx, ny, p } = syn, F = 4, NX = (nx-1)*F+1, NY = (ny-1)*F+1;
+  const v = (i,j) => p[j*nx+i][t];
+  let g = [];
+  for (let J=0;J<NY;J++){ const row=[]; const j=Math.min(ny-2,Math.floor(J/F)), fy=J/F-j;
+    for (let I=0;I<NX;I++){ const i=Math.min(nx-2,Math.floor(I/F)), fx=I/F-i;
+      row.push(v(i,j)*(1-fx)*(1-fy)+v(i+1,j)*fx*(1-fy)+v(i,j+1)*(1-fx)*fy+v(i+1,j+1)*fx*fy); }
+    g.push(row); }
+  for (let pass=0; pass<3; pass++){ // gentle smoothing so lines curve
+    const s = g.map(r=>r.slice());
+    for (let J=1;J<NY-1;J++) for (let I=1;I<NX-1;I++){ let a=0; for (let dj=-1;dj<=1;dj++) for (let di=-1;di<=1;di++) a+=g[J+dj][I+di]; s[J][I]=a/9; }
+    g = s; }
+  return { g, NX, NY, F };
+}
+function drawIsobars(){
+  layers.iso.clearLayers();
+  if (!syn || !map.hasLayer(layers.iso)) return;
+  // match the slider's hour
+  const key = wx ? wx.times[wxIdx] : null;
+  let t = key ? syn.times.indexOf(key) : -1; if (t < 0) t = Math.min(syn.times.length-1, 6);
+  const { g, NX, NY, F } = synGrid(t), st = SYN.step/F;
+  const ll = (I,J) => [SYN.lat0 + J*st, SYN.lng0 + I*st];
+  let lo = Infinity, hi = -Infinity; for (const r of g) for (const x of r){ if (x<lo) lo=x; if (x>hi) hi=x; }
+  for (let lev = Math.ceil(lo/4)*4; lev <= hi; lev += 4) {
+    const segs = [];
+    for (let J=0;J<NY-1;J++) for (let I=0;I<NX-1;I++){
+      const a=g[J][I], b=g[J][I+1], c=g[J+1][I+1], d=g[J+1][I];
+      const pts = [];
+      const edge = (v1,v2,p1,p2) => { if ((v1<lev) !== (v2<lev)) { const f=(lev-v1)/(v2-v1); pts.push([p1[0]+(p2[0]-p1[0])*f, p1[1]+(p2[1]-p1[1])*f]); } };
+      edge(a,b,ll(I,J),ll(I+1,J)); edge(b,c,ll(I+1,J),ll(I+1,J+1)); edge(c,d,ll(I+1,J+1),ll(I,J+1)); edge(d,a,ll(I,J+1),ll(I,J));
+      if (pts.length === 2) segs.push(pts);
+      else if (pts.length === 4) { segs.push([pts[0],pts[1]]); segs.push([pts[2],pts[3]]); }
+    }
+    if (!segs.length) continue;
+    L.polyline(segs, { color:"#3a3f8f", weight: lev % 20 === 0 ? 2.2 : 1.3, opacity:.8, interactive:false }).addTo(layers.iso);
+    const m = segs[Math.floor(segs.length/2)][0];
+    L.marker(m, { icon:L.divIcon({ className:"", html:`<span class="isobar-lbl">${lev}</span>`, iconAnchor:[14,7] }), interactive:false }).addTo(layers.iso);
+  }
+  // highs and lows: extremes within ±3° on the smoothed grid
+  const R = 3*F;
+  for (let J=R;J<NY-R;J+=2) for (let I=R;I<NX-R;I+=2){
+    const x = g[J][I]; let isMax = true, isMin = true;
+    for (let dj=-R;dj<=R && (isMax||isMin);dj+=2) for (let di=-R;di<=R;di+=2){ if (!dj && !di) continue; const y=g[J+dj][I+di]; if (y>=x) isMax=false; if (y<=x) isMin=false; }
+    if (isMax || isMin) L.marker(ll(I,J), { icon:L.divIcon({ className:"", html:`<div class="pcentre ${isMax?"hi":"lo"}">${isMax?"H":"L"}<small>${Math.round(x)}</small></div>`, iconAnchor:[14,16] }), interactive:false }).addTo(layers.iso);
+  }
+}
+(() => {
+  const b = document.getElementById("chipIso");
+  b.onclick = () => {
+    const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", on);
+    if (on) { layers.iso.addTo(map); if (map.getZoom() > 7) map.fitBounds([[49.5,-11],[59.5,2.5]]); syn ? drawIsobars() : loadSynoptic(); }
+    else { map.removeLayer(layers.iso); mapMsg("iso", null); }
+    document.getElementById("timebar").hidden = !(map.hasLayer(layers.wx) || map.hasLayer(layers.temp) || map.hasLayer(layers.iso));
+  };
+  setInterval(() => { if (map.hasLayer(layers.iso)) loadSynoptic(); }, 30 * 60000);
+})();
+
+/* ---------- live bus check (Settings) ---------- */
+document.getElementById("testBuses").onclick = async () => {
+  const out = document.getElementById("testOut"), lines = [];
+  const log = s => { lines.push(s); out.hidden = false; out.textContent = lines.join("\n"); };
+  const key = document.getElementById("bodsKey").value.trim();
+  const rl = document.getElementById("relayUrl").value.trim().replace(/\/$/, "");
+  log(`Government key entered: ${key ? `yes (${key.length} characters)` : "no"}`);
+  log(`Relay address entered: ${rl || "no"}`);
+  const count = t => (t.match(/<(?:\w+:)?VehicleActivity[\s>]/g) || []).length;
+  if (key) {
+    for (const [label, bb] of [["lat,lat,lng,lng", "51.44,51.55,-2.67,-2.56"], ["lng,lat,lng,lat", "-2.67,51.44,-2.56,51.55"]]) {
+      try {
+        const r = await fetch(`https://data.bus-data.dft.gov.uk/api/v1/datafeed/?boundingBox=${bb}&operatorRef=FBRI&api_key=${encodeURIComponent(key)}`);
+        const t = await r.text();
+        log(`Government feed direct (${label}): HTTP ${r.status}, ${count(t)} buses${r.ok ? "" : " · " + t.slice(0, 80)}`);
+      } catch (e) { log(`Government feed direct: blocked by this phone's browser (${e.name})`); break; }
+    }
+  }
+  if (rl) {
+    try { const r = await fetch(rl); log(`Relay reachable: HTTP ${r.status} · ${(await r.text()).slice(0, 60)}`); }
+    catch (e) { log(`Relay not reachable (${e.name}). Check the address.`); }
+    try { const r = await fetch(`${rl}/departures?stop=0100BRP92066`); const d = await r.json(); log(`Relay times: ${d.error ? "error · " + d.error : (d.departures || []).length + " departures"}`); }
+    catch (e) { log(`Relay times failed (${e.name})`); }
+    if (key) try { const r = await fetch(`${rl}/bods?boundingBox=51.44,51.55,-2.67,-2.56&operatorRef=FBRI&key=${encodeURIComponent(key)}`); const t = await r.text(); log(`Government feed via relay: HTTP ${r.status}, ${count(t)} buses`); }
+    catch (e) { log(`Government feed via relay failed (${e.name})`); }
+  }
+  log("Done. Copy this and send it to Claude if buses still don't show.");
+};
+
 let wxDebounce; map.on("moveend", () => { clearTimeout(wxDebounce); wxDebounce = setTimeout(loadWeather, 800); });
 setInterval(loadWeather, 15 * 60000);
 
