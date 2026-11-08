@@ -114,6 +114,10 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
 /* map markers */
 .me-dot{width:16px;height:16px;border-radius:50%;background:#2f7fd1;border:3px solid #fff;box-shadow:0 0 0 2px rgba(47,127,209,.4)}
 .stop-pin{background:var(--accent);color:var(--accent-ink);font:700 12px/1 var(--display);padding:4px 6px;border-radius:6px;border:2px solid #fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.bus-pin.sel{background:var(--accent);color:var(--accent-ink);font-size:16px;padding:6px 8px;box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 35%,transparent),0 1px 3px rgba(0,0,0,.4)}
+.board li.pick{cursor:pointer;border-radius:8px}
+.board li.pick:hover,.board li.pick:focus-visible{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.board li.on{background:color-mix(in srgb,var(--accent) 20%,transparent)}
 .bus-pin{background:var(--harbour);color:#fff;font:700 13px/1 var(--display);padding:4px 6px;border-radius:6px;border:2px solid #fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)}
 .temp-pin{font:700 14px/1 var(--display);color:#111;text-shadow:0 0 3px #fff,0 0 3px #fff;white-space:nowrap;display:flex;align-items:center;gap:2px}
 .temp-pin .sym{font-size:20px;line-height:1;text-shadow:none}
@@ -142,6 +146,7 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
     <button class="chip" id="chipTemp" aria-pressed="true">Weather</button>
     <button class="chip" id="chipIso" aria-pressed="false">Isobars</button>
     <button class="chip" id="chipMe" aria-pressed="false">Centre on me</button>
+    <button class="chip" id="chipClear" aria-pressed="true" hidden>Hide route ×</button>
   </div>
   <div class="mapmsg" id="mapMsg" hidden></div>
   <div class="timebar" id="timebar">
@@ -235,9 +240,13 @@ const STOPS = {
             // south-bound only: drop anything heading back north
             notTo:/cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead/i },
   centre: { atco:"0100BRP90371", name:"The Centre (stop C7)", lat:51.45460, lng:-2.59700,
-            services:["1","2","2a","Y6"], show:6, mode:"departures" },
+            services:["1","2","2a","Y6"], show:6, mode:"departures",
+            // north-bound only: buses heading out towards Henleaze, Cribbs, Brentry, Sodbury
+            onlyTo:/cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead|henleaze|westbury/i },
   green:  { atco:"0100BRP90327", name:"College Green (stop P1)", lat:51.45185, lng:-2.60060,
-            services:["1","2","2a","Y6"], show:6, mode:"departures" },
+            services:["1","2","2a","Y6"], show:6, mode:"departures",
+            // north-bound only: buses heading out towards Henleaze, Cribbs, Brentry, Sodbury
+            onlyTo:/cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead|henleaze|westbury/i },
 };
 const store = {
   get(k, d){ try{ const v = localStorage.getItem("workday."+k); return v==null ? d : JSON.parse(v); }catch{ return d; } },
@@ -253,7 +262,7 @@ const map = L.map("map", { zoomControl:false, attributionControl:true }).setView
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom:19, attribution:'© OpenStreetMap · weather Open-Meteo · buses Bus Open Data Service / bustimes.org'
 }).addTo(map);
-const layers = { wx: L.layerGroup().addTo(map), temp: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map), iso: L.layerGroup() };
+const layers = { wx: L.layerGroup().addTo(map), temp: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map), iso: L.layerGroup(), route: L.layerGroup().addTo(map) };
 let meMarker = null, me = null, activeKey = null;
 const msgs = {};
 function mapMsg(key, text){ if (text) msgs[key] = text; else delete msgs[key];
@@ -325,6 +334,7 @@ function sampleDepartures(stop){
 
 async function loadBuses(){
   clearInterval(busTimer); clearInterval(vehTimer);
+  if (typeof sel !== "undefined" && sel) clearSelection();
   const stop = STOPS[activeKey];
   document.getElementById("busHeading").textContent = stop.mode === "arrivals" ? "Next 3 south-bound buses" : "Departures · 1, 2, 2a, Y6";
   document.getElementById("stopName").textContent = stop.name;
@@ -350,6 +360,7 @@ async function refreshDepartures(){
   const want = new Set(stop.services.map(s => s.toLowerCase()));
   const rows = deps.filter(d => want.has(String(d.service).toLowerCase()))
     .filter(d => !(stop.notTo && stop.notTo.test(d.destination || "")))
+    .filter(d => !stop.onlyTo || stop.onlyTo.test(d.destination || ""))
     .map(d => ({ ...d, mins: minutesUntil(d.expected || d.scheduled) }))
     .filter(d => d.mins >= -1).slice(0, stop.show);
 
@@ -365,12 +376,17 @@ async function refreshDepartures(){
     li.querySelector(".d").textContent = d.destination;
     li.querySelector("small").textContent = live ? (late ? `Running late · timetable ${d.scheduled}` : "Live tracking") : "Timetable time";
     li.querySelector(".due span").textContent = d.expected || d.scheduled;
+    li.classList.add("pick"); li.tabIndex = 0; li.setAttribute("role", "button");
+    li.setAttribute("aria-label", `Find the ${d.service} to ${d.destination} on the map`);
+    if (sel && sel.service.toLowerCase() === String(d.service).toLowerCase() && (!sel.depVehicle || sel.depVehicle === d.vehicle)) li.classList.add("on");
+    const pick = () => selectBus({ service: String(d.service), depVehicle: d.vehicle || null, destination: d.destination });
+    li.onclick = pick; li.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
     board.appendChild(li);
   }
   busNote.className = "note" + (sample ? " warn" : "");
   busNote.textContent = sample
     ? (err ? `Couldn't reach your bus relay (${err}). Showing sample times.` : "Sample times — add your bus relay in Settings to see real buses.")
-    : `Updated ${new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})} · green = live tracked`;
+    : `Updated ${new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})} · green = live tracked · tap a bus to find it`;
 }
 
 // Live bus positions. Source 1: the government's Bus Open Data Service (needs a free key).
@@ -383,7 +399,7 @@ function parseSiri(xml){
     const lat = parseFloat(tx(va, "Latitude")), lng = parseFloat(tx(va, "Longitude"));
     if (isNaN(lat) || isNaN(lng)) continue;
     const b = tx(va, "Bearing");
-    out.push({ lat, lng, heading: b === "" ? null : parseFloat(b), service: tx(va, "LineRef") || tx(va, "PublishedLineName"),
+    out.push({ ref: tx(va, "VehicleRef"), lat, lng, heading: b === "" ? null : parseFloat(b), service: tx(va, "LineRef") || tx(va, "PublishedLineName"),
                destination: (tx(va, "DestinationName") || "").replace(/_/g, " "), when: tx(va, "RecordedAtTime") });
   }
   return out;
@@ -410,37 +426,124 @@ async function fetchBustimes(box){
   return { list: (await r.json()).vehicles || [], src: "bustimes.org" };
 }
 
+let shown = [];              // buses currently on the map
+let sel = null;              // {service, depVehicle, ref, destination}
+let follow = false;          // keep the map on the selected bus until you move the map
+
 async function refreshVehicles(){
   if (document.hidden) return;
-  if (!bodsKey && !relay) { layers.bus.clearLayers(); mapMsg("bus", "Live bus positions: add your Bus Open Data key in Settings"); return; }
+  if (!bodsKey && !relay) { layers.bus.clearLayers(); mapMsg("bus", "Live bus positions need the bus relay: Settings"); return; }
   const stop = STOPS[activeKey];
-  // Dorset Road South: south-bound buses approach from the north, so look only north of the stop.
+  // Dorset Road South: south-bound buses approach from the north.
+  // Centre / College Green: north-bound buses come in from across the city.
   const box = activeKey === "dorset"
     ? { xmin: stop.lng-0.06, xmax: stop.lng+0.04, ymin: stop.lat, ymax: stop.lat+0.06 }
-    : { xmin: stop.lng-0.05, xmax: stop.lng+0.05, ymin: stop.lat-0.04, ymax: stop.lat+0.03 };
+    : { xmin: stop.lng-0.09, xmax: stop.lng+0.09, ymin: stop.lat-0.07, ymax: stop.lat+0.04 };
   let res;
   try { res = bodsKey ? await fetchBods(box) : await fetchBustimes(box); }
   catch (e) {
-    layers.bus.clearLayers();
+    layers.bus.clearLayers(); shown = [];
     mapMsg("bus", e.badKey ? "Bus Open Data key not accepted: check it in Settings"
       : e.blocked ? "Your phone's browser blocks the government feed directly, so it needs the bus relay too"
       : "Couldn't load live buses");
     return;
   }
-  layers.bus.clearLayers();
   const want = new Set(stop.services.map(s => s.toLowerCase()));
-  for (const v of res.list) {
-    if (!want.has(String(v.service).toLowerCase())) continue;
+  shown = res.list.filter(v => {
+    if (!want.has(String(v.service).toLowerCase())) return false;
     if (activeKey === "dorset") {
-      // south-bound only: not heading for Cribbs/Brentry/Sodbury, north of the stop, and heading south when a bearing is given
-      if (stop.notTo.test(v.destination || "")) continue;
-      if (v.lat < stop.lat) continue;
-      if (v.heading != null && (v.heading < 100 || v.heading > 260)) continue;
-    }
-    L.marker([v.lat, v.lng], { icon: L.divIcon({ className:"", html:`<div class="bus-pin">${v.service}</div>`, iconAnchor:[14,12] }) })
-      .bindPopup(`<b>${v.service}</b> to ${v.destination || "?"}`).addTo(layers.bus);
+      if (stop.notTo.test(v.destination || "")) return false;
+      if (v.lat < stop.lat) return false;
+      if (v.heading != null && (v.heading < 100 || v.heading > 260)) return false;
+    } else if (!stop.onlyTo.test(v.destination || "")) return false;   // north-bound only
+    return true;
+  }).map(v => ({ ...v, ref: String(v.ref ?? v.id ?? "") }));
+  drawBuses();
+  mapMsg("bus", shown.length ? null : (activeKey==="dorset" ? "No south-bound buses on their way right now" : "No north-bound 1, 2, 2a or Y6 buses nearby right now"));
+}
+
+const digits = s => (String(s || "").match(/\d{3,}/) || [""])[0];
+function findSelected(){
+  if (!sel) return null;
+  const same = shown.filter(v => String(v.service).toLowerCase() === sel.service.toLowerCase());
+  if (!same.length) return null;
+  if (sel.ref) { const v = same.find(v => v.ref === sel.ref); if (v) return v; }
+  if (sel.depVehicle) { const n = digits(sel.depVehicle); const v = n && same.find(v => digits(v.ref) === n); if (v) return v; }
+  // otherwise the nearest one still on its way to the stop
+  const stop = STOPS[activeKey];
+  return same.reduce((a, v) => (!a || dist(v, stop) < dist(a, stop)) ? v : a, null);
+}
+function drawBuses(){
+  layers.bus.clearLayers();
+  const target = findSelected();
+  if (sel && target) sel.ref = target.ref;
+  for (const v of shown) {
+    const isSel = v === target;
+    L.marker([v.lat, v.lng], { zIndexOffset: isSel ? 900 : 0,
+      icon: L.divIcon({ className:"", html:`<div class="bus-pin${isSel ? " sel" : ""}">${v.service}</div>`, iconAnchor:[14,12] }) })
+      .on("click", () => selectBus({ service: String(v.service), ref: v.ref, destination: v.destination }))
+      .bindTooltip(`${v.service} to ${v.destination || "?"}`, { direction:"top", offset:[0,-10] })
+      .addTo(layers.bus);
   }
-  mapMsg("bus", layers.bus.getLayers().length ? null : (activeKey==="dorset" ? "No south-bound buses on their way right now" : "No 1, 2, 2a or Y6 buses nearby right now"));
+  if (sel && target && follow) map.panTo([target.lat, target.lng], { animate:true });
+  if (sel && !target) mapMsg("sel", `Can't see the ${sel.service} live right now. Showing its route.`); else mapMsg("sel", null);
+}
+
+async function selectBus(s){
+  const same = sel && sel.service === s.service && (s.ref ? sel.ref === s.ref : sel.depVehicle === s.depVehicle);
+  if (same) return clearSelection();
+  sel = s; follow = true;
+  document.getElementById("chipClear").hidden = false;
+  document.getElementById("chipClear").textContent = `Hide ${s.service} route ×`;
+  if (!map.hasLayer(layers.bus)) { layers.bus.addTo(map); document.getElementById("chipBus").setAttribute("aria-pressed", "true"); }
+  drawBuses();
+  const v = findSelected();
+  if (v) map.flyTo([v.lat, v.lng], 16, { duration: .8 });
+  document.getElementById("mapwrap").scrollIntoView({ behavior: "smooth", block: "start" });
+  refreshDepartures();
+  drawRoute(s.service, activeKey === "dorset" ? "south" : "north", !v);
+}
+function clearSelection(){
+  sel = null; follow = false; layers.route.clearLayers(); mapMsg("sel", null); mapMsg("route", null);
+  document.getElementById("chipClear").hidden = true;
+  drawBuses(); refreshDepartures();
+}
+document.getElementById("chipClear").onclick = clearSelection;
+map.on("dragstart", () => { follow = false; });
+
+/* ---------- bus routes from OpenStreetMap (Overpass API) ---------- */
+const routeCache = {};
+const DIR_WORDS = { south: /stockwood|broomhill|whitmore|centre|center|bus station|rupert|broadmead|temple/i,
+                    north: /cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead|henleaze/i };
+async function drawRoute(service, dir, fitToRoute){
+  layers.route.clearLayers();
+  mapMsg("route", `Loading the ${service} route…`);
+  const key = service.toLowerCase();
+  try {
+    if (!routeCache[key]) {
+      const q = `[out:json][timeout:25];relation["type"="route"]["route"="bus"]["ref"~"^${service}$",i](51.35,-2.80,51.62,-2.25);out geom;`;
+      const r = await fetch("https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(q));
+      if (!r.ok) throw new Error(r.status);
+      routeCache[key] = (await r.json()).elements || [];
+    }
+    if (!sel || sel.service.toLowerCase() !== key) return;   // selection changed while loading
+    // only routes that actually pass this stop (route 1 also exists in Bath, for example)
+    const stop = STOPS[activeKey];
+    const near = r => (r.members || []).some(m => (m.geometry || []).some(p => dist({ lat:p.lat, lng:p.lon }, stop) < 400));
+    const rels = routeCache[key].filter(near);
+    if (!rels.length) { mapMsg("route", `No map route found for the ${service}`); return; }
+    // pick the relation running in the right direction: its "to" (or name) mentions where it's heading
+    const label = r => `${r.tags?.to || ""} ${r.tags?.name || ""}`;
+    const rel = rels.find(r => DIR_WORDS[dir].test(r.tags?.to || "")) || rels.find(r => DIR_WORDS[dir].test(label(r))) || rels[0];
+    const lines = (rel.members || []).filter(m => m.type === "way" && m.geometry).map(m => m.geometry.map(p => [p.lat, p.lon]));
+    if (!lines.length) { mapMsg("route", `No map route found for the ${service}`); return; }
+    L.polyline(lines, { color:"#ffffff", weight:9, opacity:.9, interactive:false }).addTo(layers.route);
+    const line = L.polyline(lines, { color:getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#e8a33c", weight:5, opacity:.95, interactive:false }).addTo(layers.route);
+    const stops = (rel.members || []).filter(m => m.type === "node" && /stop|platform/.test(m.role || "") && m.lat);
+    for (const s of stops) L.circleMarker([s.lat, s.lon], { radius:3, color:"#123a45", weight:2, fillColor:"#fff", fillOpacity:1, interactive:false }).addTo(layers.route);
+    mapMsg("route", null);
+    if (fitToRoute) map.fitBounds(line.getBounds().pad(0.05));
+  } catch { mapMsg("route", `Couldn't load the ${service} route`); }
 }
 
 /* ---------- weather (Open-Meteo, grid over the visible map) ---------- */
