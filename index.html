@@ -157,7 +157,7 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
   <div class="mapmsg" id="mapMsg" hidden></div>
   <div class="timebar" id="timebar">
     <button id="playBtn" aria-label="Play weather timeline">▶</button>
-    <input type="range" id="slider" min="0" max="15" value="3" aria-label="Weather time">
+    <input type="range" id="slider" min="0" max="15" value="3" step="any" aria-label="Weather time">
     <span class="t num" id="sliderLabel">Now</span>
   </div>
 </div>
@@ -568,6 +568,17 @@ const show = { rain: true, temps: true, iso: false };
 const slider = document.getElementById("slider"), sliderLabel = document.getElementById("sliderLabel");
 const OM = "https://api.open-meteo.com/v1/forecast", WINDOW = "past_hours=3&forecast_hours=12&timezone=Europe%2FLondon";
 const nowKey = () => new Date().toLocaleString("sv-SE", { timeZone: "Europe/London" }).slice(0, 13).replace(" ", "T");
+// value of an hourly series at a fractional hour, blended between the two neighbouring hours
+const lerpAt = (arr, t) => { if (!arr) return null;
+  const i = Math.max(0, Math.min(arr.length - 1, Math.floor(t))), j = Math.min(arr.length - 1, i + 1), f = Math.max(0, Math.min(1, t - i));
+  const a = arr[i], b = arr[j]; if (a == null) return b; if (b == null) return a; return a + (b - a) * f; };
+// slider position as a clock time, to the nearest 5 minutes ("10:35", or "Tue 01:20" after midnight)
+function wxClock(t){
+  const base = Math.floor(t), d = new Date(wx.times[base] + ":00Z");
+  d.setTime(d.getTime() + Math.round((t - base) * 12) * 5 * 60000);
+  const iso = d.toISOString(), hhmm = iso.slice(11, 16);
+  return iso.slice(0, 10) === nowKey().slice(0, 10) ? hhmm : `${d.toLocaleDateString("en-GB", { weekday: "short", timeZone: "UTC" })} ${hhmm}`;
+}
 
 async function om(lats, lngs, vars){
   const jobs = [];
@@ -576,8 +587,12 @@ async function om(lats, lngs, vars){
       .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(d => Array.isArray(d) ? d : [d]));
   return (await Promise.all(jobs)).flat();
 }
-const curTime = () => wx ? wx.times[wxIdx] : null;
-const tIndex = times => { const k = curTime(); const i = k ? times.indexOf(k) : -1; return i < 0 ? Math.min(3, times.length - 1) : i; };
+// the slider's fractional hour, mapped onto another dataset's hours
+const tIndex = times => {
+  if (!wx) return Math.min(3, times.length - 1);
+  const base = Math.floor(wxIdx), i = times.indexOf(wx.times[base]);
+  return i < 0 ? Math.min(3, times.length - 1) : Math.min(times.length - 1, i + (wxIdx - base));
+};
 function bilin(fi, fj, ni, nj, get){
   const i0 = Math.max(0, Math.min(ni - 2, Math.floor(fi))), j0 = Math.max(0, Math.min(nj - 2, Math.floor(fj)));
   const a = Math.max(0, Math.min(1, fi - i0)), b = Math.max(0, Math.min(1, fj - j0));
@@ -599,7 +614,7 @@ async function loadWeather(){
     wx = { times, nowIdx, grid: N ? { ...g, p: d.slice(0, N*N).map(x => x.hourly.precipitation) } : null,
            here: { t: hd.temperature_2m, p: hd.precipitation, pp: hd.precipitation_probability || [] } };
     slider.max = times.length - 1;
-    if (wxFirst && !playTimer) { wxIdx = nowIdx; slider.value = wxIdx; wxFirst = false; }
+    if (wxFirst && !playTimer) { wxIdx = Math.min(times.length - 1, nowIdx + new Date().getMinutes() / 60); slider.value = wxIdx; wxFirst = false; }
     drawWxChart(); redrawWx(); mapMsg("wx", null);
   } catch (e) {
     sliderLabel.textContent = "No data";
@@ -611,7 +626,7 @@ function localRain(lat, lng, t){
   const g = wx && wx.grid; if (!g) return null;
   const fi = (lat - g.s) / g.dLat - .5, fj = (lng - g.w) / g.dLng - .5;
   if (fi < -.5 || fj < -.5 || fi > g.N - .5 || fj > g.N - .5) return null;
-  return bilin(fi, fj, g.N, g.N, (i, j) => g.p[i*g.N + j][t] || 0);
+  return bilin(fi, fj, g.N, g.N, (i, j) => lerpAt(g.p[i*g.N + j], t) || 0);
 }
 
 /* --- wide grid: pressure, rain, 850 hPa temperature and wind --- */
@@ -635,13 +650,15 @@ async function loadSynoptic(force){
 }
 
 // Turns the 2° data for one hour into smooth fields, isobars, highs/lows and estimated fronts.
-function computeSyn(S, t){
-  if (S.cache && S.cache[t]) return S.cache[t];
+function computeSyn(S, t, full){
+  const ck = t.toFixed(3) + (full ? "f" : "r");
+  if (S.cache[ck]) return S.cache[ck];
+  if (Object.keys(S.cache).length > 400) S.cache = {};
   const { nx, ny } = S, F = SYN.F, NX = (nx-1)*F + 1, NY = (ny-1)*F + 1, st = SYN.step / F;
   const up = (arr, passes) => {
     let g = [];
     for (let J = 0; J < NY; J++) { const row = [];
-      for (let I = 0; I < NX; I++) row.push(bilin(J/F, I/F, ny, nx, (j, i) => { const v = arr[j*nx + i][t]; return v == null ? 0 : v; }));
+      for (let I = 0; I < NX; I++) row.push(bilin(J/F, I/F, ny, nx, (j, i) => { const v = lerpAt(arr[j*nx + i], t); return v == null ? 0 : v; }));
       g.push(row); }
     for (let p = 0; p < passes; p++) { const s = g.map(r => r.slice());
       for (let J = 1; J < NY-1; J++) for (let I = 1; I < NX-1; I++) { let a = 0; for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) a += g[J+dj][I+di]; s[J][I] = a / 9; }
@@ -649,10 +666,12 @@ function computeSyn(S, t){
     return g;
   };
   const ll = (I, J) => [SYN.lat0 + J*st, SYN.lng0 + I*st];
-  const P = up(S.P, 3), R = up(S.R, 2), T = up(S.T, 3);
-  const Uw = S.WS.map((ws, k) => ws.map((s, h) => -(s||0) * Math.sin((S.WD[k][h]||0) * Math.PI/180)));
-  const Vw = S.WS.map((ws, k) => ws.map((s, h) => -(s||0) * Math.cos((S.WD[k][h]||0) * Math.PI/180)));
-  const U = up(Uw, 1), V = up(Vw, 1);
+  const R = up(S.R, 2);
+  if (!full) { const out = { R, NX, NY, st }; S.cache[ck] = out; return out; }   // rain only: skip isobars and fronts
+  const P = up(S.P, 3), T = up(S.T, 3);
+  S.Uw = S.Uw || S.WS.map((ws, k) => ws.map((s, h) => -(s||0) * Math.sin((S.WD[k][h]||0) * Math.PI/180)));
+  S.Vw = S.Vw || S.WS.map((ws, k) => ws.map((s, h) => -(s||0) * Math.cos((S.WD[k][h]||0) * Math.PI/180)));
+  const U = up(S.Uw, 1), V = up(S.Vw, 1);
 
   // marching squares: contour of field g at level lev, as [[lat,lng],[lat,lng]] segments
   const contour = (g, lev, accept) => {
@@ -733,7 +752,7 @@ function computeSyn(S, t){
     fronts.push({ pts: line, kind: sm.map(c => c > 0 ? "cold" : "warm"), move: info.map((o, k) => [o.n[0]*Math.sign(sm[k] || 1), o.n[1]*Math.sign(sm[k] || 1)]) });
   }
   const out = { P, R, isobars, centres, fronts, NX, NY, st };
-  if (S.cache) S.cache[t] = out;
+  S.cache[ck] = out;
   return out;
 }
 function synRain(C, lat, lng){
@@ -754,7 +773,8 @@ function rainRGBA(v){
 }
 function drawWxCanvas(ctx, w, h, m){
   const z = m.getZoom(), dark = z <= 8;
-  const C = syn ? computeSyn(syn, tIndex(syn.times)) : null;
+  const needSyn = syn && (show.iso || (show.rain && (z < 9 || !(wx && wx.grid))));
+  const C = needSyn ? computeSyn(syn, tIndex(syn.times), show.iso) : null;
   if (show.rain && (wx || C)) {
     const step = 4, cw = Math.ceil(w/step), ch = Math.ceil(h/step);
     const off = document.createElement("canvas"); off.width = cw; off.height = ch;
@@ -847,35 +867,42 @@ async function loadPlaces(){
   try {
     const d = await om(all.map(p => p[1]), all.map(p => p[2]), "temperature_2m");
     placeT = { times: d[0].hourly.time, t: d.map(x => x.hourly.temperature_2m) };
-    drawTemps();
+    tempSig = ""; drawTemps();
   } catch {}
 }
+let tempSig = "";
 function drawTemps(){
-  layers.temp.clearLayers();
-  if (!show.temps || !placeT) return;
+  if (!show.temps || !placeT) { layers.temp.clearLayers(); tempSig = ""; return; }
   const z = map.getZoom(), t = tIndex(placeT.times);
-  const set = z >= 10 ? PLACES_LOCAL.map((p, k) => [p, k]) : z <= 9 ? PLACES_UK.map((p, k) => [p, k + PLACES_LOCAL.length]) : [];
-  for (const [[name, lat, lng], k] of set) {
-    const v = placeT.t[k][t]; if (v == null) continue;
+  const set = z >= 10 ? PLACES_LOCAL.map((p, k) => [p, k]) : PLACES_UK.map((p, k) => [p, k + PLACES_LOCAL.length]);
+  const items = set.map(([p, k]) => [p, lerpAt(placeT.t[k], t)]).filter(x => x[1] != null);
+  const sig = (z >= 10 ? "L" : "U") + items.map(x => Math.round(x[1])).join(",");
+  if (sig === tempSig) return;
+  tempSig = sig; layers.temp.clearLayers();
+  for (const [[name, lat, lng], v] of items)
     L.marker([lat, lng], { interactive: false, keyboard: false,
       icon: L.divIcon({ className: "", iconAnchor: [4, 11],
         html: `<div class="tl"><i></i><b class="num">${Math.round(v)}</b><span>${name}</span></div>` }) }).addTo(layers.temp);
-  }
 }
 
 /* --- redraw everything for the slider hour --- */
 function redrawWx(){
   if (wx) {
-    const off = wxIdx - wx.nowIdx;
-    sliderLabel.textContent = off === 0 ? "Now" : (off > 0 ? `+${off} h` : `${off} h`);
-    sliderLabel.title = wx.times[wxIdx].slice(11);
-    const wet = (wx.here.p[wxIdx] || 0) >= .05 || (wx.grid && wx.grid.p.some(c => (c[wxIdx] || 0) >= .05));
+    const clock = wxClock(wxIdx), hr = Math.round(wxIdx);
+    sliderLabel.textContent = clock; slider.setAttribute("aria-valuetext", clock);
+    const wet = (wx.here.p[hr] || 0) >= .05 || (wx.grid && wx.grid.p.some(c => (c[hr] || 0) >= .05));
     if (!wet && map.getZoom() >= 9) sliderLabel.textContent += " · dry";
+    moveChartCursor();
   }
   if (map.getZoom() < 9 && !syn) loadSynoptic();
   wxCanvas.redraw(); drawTemps();
 }
 
+let wxChartGeo = null;
+function moveChartCursor(){
+  const c = document.getElementById("wxCursor"); if (!c || !wxChartGeo) return;
+  const x = wxChartGeo.L0 + wxChartGeo.cw * (wxIdx + .5); c.setAttribute("x1", x); c.setAttribute("x2", x);
+}
 function drawWxChart(){
   const svg = document.getElementById("wxChart"), h = wx.here, n = h.t.length, now = wx.nowIdx;
   const W = 360, H = 160, L0 = 28, R0 = 34, T0 = 16, B0 = 26, cw = (W - L0 - R0)/n, base = H - B0, ph = H - T0 - B0;
@@ -899,17 +926,28 @@ function drawWxChart(){
   s += `<text x="${L0-4}" y="${y(tMax)+4}" text-anchor="end">${tMax}°</text><text x="${L0-4}" y="${y(tMin)}" text-anchor="end">${tMin}°</text>`;
   s += `<text x="${W-R0+4}" y="${T0+4}" style="fill:var(--rain)">${pMax} mm</text><text x="${W-R0+4}" y="${base}" style="fill:var(--rain)">0</text>`;
   [0, now, n-1].forEach(k => s += `<text x="${L0 + cw*(k+.5)}" y="${H-8}" text-anchor="middle">${k === now ? "Now" : wx.times[k].slice(11, 16)}</text>`);
-  svg.innerHTML = s;
+  s += `<line id="wxCursor" x1="0" x2="0" y1="${T0 - 2}" y2="${base}" stroke="var(--ink)" stroke-width="1.5" opacity=".6"/>`;
+  svg.innerHTML = s; wxChartGeo = { L0, cw }; moveChartCursor();
   const due = h.p.slice(now + 1).reduce((a, b) => a + (b || 0), 0), peak = Math.max(0, ...h.pp.slice(now + 1).map(v => v || 0));
   document.getElementById("wxTemp").textContent = `${Math.round(h.t[now])}°C`;
   document.getElementById("wxRain").textContent = `${(h.p[now] || 0).toFixed(1)} mm rain this hour · ${due.toFixed(1)} mm predicted in the next 12 h (up to ${peak}% chance)`;
 }
 
-slider.oninput = () => { wxIdx = +slider.value; redrawWx(); };
+const PLAY_STEP = 1/12;   // 5 minutes per frame
+let playHold = 0;
+function stopPlay(){ clearInterval(playTimer); playTimer = null; document.getElementById("playBtn").textContent = "▶"; }
+slider.oninput = () => { if (playTimer) stopPlay(); wxIdx = +slider.value; redrawWx(); };
 document.getElementById("playBtn").onclick = e => {
-  if (playTimer) { clearInterval(playTimer); playTimer = null; e.target.textContent = "▶"; return; }
-  e.target.textContent = "❚❚";
-  playTimer = setInterval(() => { wxIdx = (wxIdx + 1) % (+slider.max + 1); slider.value = wxIdx; redrawWx(); }, 900);
+  if (playTimer) return stopPlay();
+  e.currentTarget.textContent = "❚❚";
+  const end = () => wxIdx >= +slider.max - 1e-6;
+  if (end()) { wxIdx = 0; slider.value = 0; redrawWx(); }
+  playHold = 0;
+  playTimer = setInterval(() => {
+    if (playHold > 0) { if (--playHold === 0) { wxIdx = 0; slider.value = 0; redrawWx(); } return; }
+    wxIdx = Math.min(+slider.max, wxIdx + PLAY_STEP); slider.value = wxIdx; redrawWx();
+    if (end()) playHold = 18;   // hold the last frame for about a second, then loop
+  }, 75);
 };
 function setTimebar(){ document.getElementById("timebar").hidden = !(show.rain || show.temps || show.iso); }
 for (const [id, k] of [["chipRain", "rain"], ["chipTemp", "temps"], ["chipIso", "iso"]]) {
