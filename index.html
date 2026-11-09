@@ -49,12 +49,18 @@ header h1{font:700 22px/1 var(--display);letter-spacing:.04em;text-transform:upp
 
 #mapwrap{position:relative;height:46vh;min-height:280px;max-height:520px}
 #map{position:absolute;inset:0;background:var(--line)}
-.chips{position:absolute;top:10px;left:10px;right:10px;z-index:500;display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+[hidden]{display:none!important}
+.routekey{position:absolute;right:10px;bottom:24px;z-index:500;background:var(--surface);color:var(--ink);border-radius:10px;padding:6px 10px;
+  display:flex;gap:10px;font:700 14px/1 var(--display);box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.routekey span{display:flex;align-items:center;gap:5px}
+.routekey i{width:18px;height:6px;border-radius:3px;display:block}
+.maptop{position:absolute;top:10px;left:10px;right:10px;z-index:500;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.chips{display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
 .chip{pointer-events:auto;border:0;border-radius:999px;padding:7px 12px;background:var(--surface);color:var(--ink);
   box-shadow:0 1px 4px rgba(0,0,0,.25);font-weight:700;font-size:13px;cursor:pointer}
 .chip[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
 .mapmsg{position:absolute;left:10px;right:10px;bottom:62px;z-index:500;background:var(--surface);color:var(--ink);border-radius:10px;padding:7px 10px;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.3)}
-.timebar{position:absolute;left:10px;right:10px;bottom:10px;z-index:500;background:var(--surface);border-radius:12px;
+.timebar{pointer-events:auto;background:var(--surface);border-radius:12px;
   padding:8px 12px;box-shadow:0 1px 6px rgba(0,0,0,.3);display:flex;align-items:center;gap:10px}
 .timebar input{flex:1;min-width:0;accent-color:var(--accent)}
 .timebar .t{font:600 18px/1 var(--display);min-width:64px;white-space:nowrap;text-align:right}
@@ -113,8 +119,8 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
 
 /* map markers */
 .me-dot{width:16px;height:16px;border-radius:50%;background:#2f7fd1;border:3px solid #fff;box-shadow:0 0 0 2px rgba(47,127,209,.4)}
-.stop-pin{background:var(--accent);color:var(--accent-ink);font:700 12px/1 var(--display);padding:4px 6px;border-radius:6px;border:2px solid #fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)}
-.bus-pin.sel{background:var(--accent);color:var(--accent-ink);font-size:16px;padding:6px 8px;box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 35%,transparent),0 1px 3px rgba(0,0,0,.4)}
+.stop-pin{cursor:pointer;background:var(--accent);color:var(--accent-ink);font:700 12px/1 var(--display);padding:4px 6px;border-radius:6px;border:2px solid #fff;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)}
+.bus-pin.sel{font-size:16px;padding:6px 8px;box-shadow:0 0 0 3px #fff,0 0 0 6px rgba(0,0,0,.45)}
 .board li.pick{cursor:pointer;border-radius:8px}
 .board li.pick:hover,.board li.pick:focus-visible{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .board li.on{background:color-mix(in srgb,var(--accent) 20%,transparent)}
@@ -146,20 +152,23 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
 
 <div id="mapwrap">
   <div id="map" role="application" aria-label="Map"></div>
-  <div class="chips">
-    <button class="chip" id="chipBus" aria-pressed="true">Buses</button>
-    <button class="chip" id="chipRain" aria-pressed="true">Rain</button>
-    <button class="chip" id="chipTemp" aria-pressed="true">Temps</button>
-    <button class="chip" id="chipIso" aria-pressed="false">Isobars &amp; fronts</button>
-    <button class="chip" id="chipMe" aria-pressed="false">Centre on me</button>
-    <button class="chip" id="chipClear" aria-pressed="true" hidden>Hide route ×</button>
+  <div class="maptop">
+    <div class="timebar" id="timebar">
+      <button id="playBtn" aria-label="Play weather timeline">▶</button>
+      <input type="range" id="slider" min="0" max="15" value="3" step="any" aria-label="Weather time">
+      <span class="t num" id="sliderLabel">Now</span>
+    </div>
+    <div class="chips">
+      <button class="chip" id="chipBus" aria-pressed="true">Buses</button>
+      <button class="chip" id="chipRain" aria-pressed="true">Rain</button>
+      <button class="chip" id="chipTemp" aria-pressed="true">Temps</button>
+      <button class="chip" id="chipIso" aria-pressed="false">Isobars &amp; fronts</button>
+      <button class="chip" id="chipMe" aria-pressed="false">Centre on me</button>
+      <button class="chip" id="chipClear" aria-pressed="true" hidden>Hide route ×</button>
+    </div>
   </div>
+  <div class="routekey" id="routeKey" hidden></div>
   <div class="mapmsg" id="mapMsg" hidden></div>
-  <div class="timebar" id="timebar">
-    <button id="playBtn" aria-label="Play weather timeline">▶</button>
-    <input type="range" id="slider" min="0" max="15" value="3" step="any" aria-label="Weather time">
-    <span class="t num" id="sliderLabel">Now</span>
-  </div>
 </div>
 
 <main>
@@ -240,6 +249,8 @@ if (!window.L) document.getElementById("map").innerHTML =
 <script>
 "use strict";
 /* ---------- config ---------- */
+const ROUTE_COLOURS = { "1": "#8e24aa", "2": "#e53935", "2a": "#fb8c00", "y6": "#00a152" };
+const routeColour = s => ROUTE_COLOURS[String(s).toLowerCase()] || "#123a45";
 const STOPS = {
   dorset: { atco:"0100BRP92066", name:"Dorset Road South · towards city centre", lat:51.48852, lng:-2.60848,
             services:["2","2a","Y6"], show:3, mode:"arrivals",
@@ -275,14 +286,29 @@ function pickBase(){ const dark = map.getZoom() <= 8;
   if (!dark && !map.hasLayer(streets)) { map.removeLayer(satellite); streets.addTo(map); } }
 map.on("zoomend", pickBase); pickBase();
 const layers = { temp: L.layerGroup().addTo(map), bus: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map), route: L.layerGroup().addTo(map) };
-let meMarker = null, me = null, activeKey = null;
+map.createPane("routes"); map.getPane("routes").style.zIndex = 450; map.getPane("routes").style.pointerEvents = "none";
+// Zoomed out to the pressure chart: hide buses, stops and routes. Zoomed back in: show them again.
+let busesOn = true;
+function setBusesOn(on){ busesOn = on; document.getElementById("chipBus").setAttribute("aria-pressed", on); applyZoomVisibility(); }
+function applyZoomVisibility(){
+  const close = map.getZoom() > 8;
+  for (const [l, on] of [[layers.bus, close && busesOn], [layers.stops, close], [layers.route, close]]) {
+    if (on && !map.hasLayer(l)) l.addTo(map);
+    if (!on && map.hasLayer(l)) map.removeLayer(l);
+  }
+  const rk = document.getElementById("routeKey"); if (rk) rk.style.visibility = close ? "" : "hidden";
+}
+map.on("zoomend", applyZoomVisibility);
+let meMarker = null, me = null, activeKey = null, pinnedStop = null;
 const msgs = {};
 function mapMsg(key, text){ if (text) msgs[key] = text; else delete msgs[key];
   const el = document.getElementById("mapMsg"), all = Object.values(msgs);
   el.hidden = !all.length; el.textContent = all.join(" · "); }
 
 for (const [k, s] of Object.entries(STOPS)) {
-  s.marker = L.marker([s.lat, s.lng], { icon: L.divIcon({ className:"", html:`<div class="stop-pin">${k==="dorset"?"Dorset Rd S":k==="centre"?"Centre C7":"College Grn P1"}</div>`, iconAnchor:[30,12] }) })
+  s.marker = L.marker([s.lat, s.lng], { icon: L.divIcon({ className:"", html:`<div class="stop-pin">${k==="dorset"?"Dorset Rd S":k==="centre"?"Centre C7":"College Grn P1"}</div>`, iconAnchor:[30,12] }),
+    title: `Show all routes and buses heading to ${s.name}`, zIndexOffset: 500 })
+    .on("click", () => selectStop(k))
     .addTo(layers.stops);
 }
 
@@ -301,7 +327,7 @@ function setMe(pos, label){
   else meMarker.setLatLng([pos.lat,pos.lng]);
   // pick stop: Dorset Road vs the nearer of Centre / College Green
   const dD = dist(pos, STOPS.dorset), dC = dist(pos, STOPS.centre), dG = dist(pos, STOPS.green);
-  const key = dD <= Math.min(dC, dG) ? "dorset" : (dC <= dG ? "centre" : "green");
+  const key = pinnedStop || (dD <= Math.min(dC, dG) ? "dorset" : (dC <= dG ? "centre" : "green"));
   document.getElementById("where").textContent = `${label} · ${fmtDist({dorset:dD,centre:dC,green:dG}[key])} from ${key==="dorset"?"Dorset Rd South":key==="centre"?"The Centre":"College Green"}`;
   if (key !== activeKey) { activeKey = key; loadBuses(); }
   if (first) map.fitBounds(L.latLngBounds([[pos.lat,pos.lng],[STOPS[key].lat,STOPS[key].lng]]).pad(0.6), { maxZoom:16 });
@@ -398,7 +424,7 @@ async function refreshDepartures(){
   busNote.className = "note" + (sample ? " warn" : "");
   busNote.textContent = sample
     ? (err ? `Couldn't reach your bus relay (${err}). Showing sample times.` : "Sample times — add your bus relay in Settings to see real buses.")
-    : `Updated ${new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})} · green = live tracked · tap a bus to find it`;
+    : `Updated ${new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})} · green = live tracked · tap a bus or a stop on the map`;
 }
 
 // Live bus positions. Source 1: the government's Bus Open Data Service (needs a free key).
@@ -492,7 +518,7 @@ function drawBuses(){
   for (const v of shown) {
     const isSel = v === target;
     L.marker([v.lat, v.lng], { zIndexOffset: isSel ? 900 : 0,
-      icon: L.divIcon({ className:"", html:`<div class="bus-pin${isSel ? " sel" : ""}">${v.service}</div>`, iconAnchor:[14,12] }) })
+      icon: L.divIcon({ className:"", html:`<div class="bus-pin${isSel ? " sel" : ""}" style="background:${routeColour(v.service)}">${v.service}</div>`, iconAnchor:[14,12] }) })
       .on("click", () => selectBus({ service: String(v.service), ref: v.ref, destination: v.destination }))
       .bindTooltip(`${v.service} to ${v.destination || "?"}`, { direction:"top", offset:[0,-10] })
       .addTo(layers.bus);
@@ -501,24 +527,49 @@ function drawBuses(){
   if (sel && !target) mapMsg("sel", `Can't see the ${sel.service} live right now. Showing its route.`); else mapMsg("sel", null);
 }
 
+let stopSel = false;   // showing every route and bus for the tapped stop
+function busBox(k){
+  const st = STOPS[k];
+  return k === "dorset"
+    ? { xmin: st.lng-0.06, xmax: st.lng+0.04, ymin: st.lat, ymax: st.lat+0.06 }
+    : { xmin: st.lng-0.09, xmax: st.lng+0.09, ymin: st.lat-0.07, ymax: st.lat+0.04 };
+}
+function showClearChip(text){ const c = document.getElementById("chipClear"); c.hidden = false; c.textContent = text; }
+
 async function selectBus(s){
   const same = sel && sel.service === s.service && (s.ref ? sel.ref === s.ref : sel.depVehicle === s.depVehicle);
   if (same) return clearSelection();
-  sel = s; follow = true;
-  document.getElementById("chipClear").hidden = false;
-  document.getElementById("chipClear").textContent = `Hide ${s.service} route ×`;
-  if (!map.hasLayer(layers.bus)) { layers.bus.addTo(map); document.getElementById("chipBus").setAttribute("aria-pressed", "true"); }
+  sel = s; stopSel = false; follow = true;
+  showClearChip(`Hide ${s.service} route ×`);
+  setBusesOn(true);
   drawBuses();
   const v = findSelected();
   if (v) map.flyTo([v.lat, v.lng], 16, { duration: .8 });
   document.getElementById("mapwrap").scrollIntoView({ behavior: "smooth", block: "start" });
   refreshDepartures();
-  drawRoute(s.service, activeKey === "dorset" ? "south" : "north", !v);
+  drawRoutes([s.service], activeKey === "dorset" ? "south" : "north", !v);
 }
+
+// Tap a stop: every route serving it, and every bus on its way there.
+function selectStop(k){
+  if (stopSel && activeKey === k) return clearSelection();
+  if (activeKey !== k) { activeKey = k; loadBuses(); }   // switches the times panel to this stop
+  sel = null; follow = false; pinnedStop = k; stopSel = true;
+  showClearChip("Hide routes ×");
+  setBusesOn(true);
+  const b = busBox(k);
+  map.flyToBounds([[b.ymin, b.xmin], [b.ymax, b.xmax]], { duration: .8, padding: [10, 10] });
+  drawBuses(); refreshVehicles();
+  drawRoutes(STOPS[k].services, k === "dorset" ? "south" : "north", false);
+}
+
 function clearSelection(){
-  sel = null; follow = false; layers.route.clearLayers(); mapMsg("sel", null); mapMsg("route", null);
+  sel = null; stopSel = false; follow = false; routeReq++;
+  layers.route.clearLayers(); mapMsg("sel", null); mapMsg("route", null);
+  document.getElementById("routeKey").hidden = true;
   document.getElementById("chipClear").hidden = true;
   drawBuses(); refreshDepartures();
+  if (pinnedStop) { pinnedStop = null; if (me) setMe(me, locMode === "gps" ? "You" : "Pretend location"); }
 }
 document.getElementById("chipClear").onclick = clearSelection;
 map.on("dragstart", () => { follow = false; });
@@ -527,42 +578,62 @@ map.on("dragstart", () => { follow = false; });
 const routeCache = {};
 const DIR_WORDS = { south: /stockwood|broomhill|whitmore|centre|center|bus station|rupert|broadmead|temple/i,
                     north: /cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead|henleaze/i };
-async function drawRoute(service, dir, fitToRoute){
-  layers.route.clearLayers();
-  mapMsg("route", `Loading the ${service} route…`);
-  const key = service.toLowerCase();
-  try {
-    if (!routeCache[key]) {
-      const q = `[out:json][timeout:25];relation["type"="route"]["route"="bus"]["ref"~"^${service}$",i](51.35,-2.80,51.62,-2.25);out geom;`;
-      const r = await fetch("https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(q));
-      if (!r.ok) throw new Error(r.status);
-      routeCache[key] = (await r.json()).elements || [];
-    }
-    if (!sel || sel.service.toLowerCase() !== key) return;   // selection changed while loading
-    // only routes that actually pass this stop (route 1 also exists in Bath, for example)
-    const stop = STOPS[activeKey];
-    const near = r => (r.members || []).some(m => (m.geometry || []).some(p => dist({ lat:p.lat, lng:p.lon }, stop) < 400));
-    const rels = routeCache[key].filter(near);
-    if (!rels.length) { mapMsg("route", `No map route found for the ${service}`); return; }
-    // pick the relation running in the right direction: its "to" (or name) mentions where it's heading
-    const label = r => `${r.tags?.to || ""} ${r.tags?.name || ""}`;
-    const rel = rels.find(r => DIR_WORDS[dir].test(r.tags?.to || "")) || rels.find(r => DIR_WORDS[dir].test(label(r))) || rels[0];
-    const lines = (rel.members || []).filter(m => m.type === "way" && m.geometry).map(m => m.geometry.map(p => [p.lat, p.lon]));
-    if (!lines.length) { mapMsg("route", `No map route found for the ${service}`); return; }
-    L.polyline(lines, { color:"#ffffff", weight:9, opacity:.9, interactive:false }).addTo(layers.route);
-    const line = L.polyline(lines, { color:getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#e8a33c", weight:5, opacity:.95, interactive:false }).addTo(layers.route);
-    const stops = (rel.members || []).filter(m => m.type === "node" && /stop|platform/.test(m.role || "") && m.lat);
-    for (const s of stops) L.circleMarker([s.lat, s.lon], { radius:3, color:"#123a45", weight:2, fillColor:"#fff", fillOpacity:1, interactive:false }).addTo(layers.route);
-    mapMsg("route", null);
-    if (fitToRoute) map.fitBounds(line.getBounds().pad(0.05));
-  } catch { mapMsg("route", `Couldn't load the ${service} route`); }
+let routeReq = 0;
+async function loadRouteData(services){
+  const missing = services.map(s => s.toLowerCase()).filter(k => !routeCache[k]);
+  if (!missing.length) return;
+  // one request for all of them, to stay within the free service's limits
+  const q = `[out:json][timeout:30];relation["type"="route"]["route"="bus"]["ref"~"^(${missing.join("|")})$",i](51.35,-2.80,51.62,-2.25);out geom;`;
+  const r = await fetch("https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(q));
+  if (!r.ok) throw new Error(r.status);
+  const els = (await r.json()).elements || [];
+  for (const k of missing) routeCache[k] = els.filter(e => String(e.tags?.ref || "").toLowerCase() === k);
+}
+function routeFor(service, dir, stop){
+  // only routes that actually pass this stop (route 1 also exists in Bath, for example)
+  const near = r => (r.members || []).some(m => (m.geometry || []).some(p => dist({ lat:p.lat, lng:p.lon }, stop) < 400));
+  const rels = (routeCache[service.toLowerCase()] || []).filter(near);
+  if (!rels.length) return null;
+  // the relation running in the right direction: its "to" (or name) mentions where it's heading
+  const label = r => `${r.tags?.to || ""} ${r.tags?.name || ""}`;
+  const rel = rels.find(r => DIR_WORDS[dir].test(r.tags?.to || "")) || rels.find(r => DIR_WORDS[dir].test(label(r))) || rels[0];
+  const lines = (rel.members || []).filter(m => m.type === "way" && m.geometry).map(m => m.geometry.map(p => [p.lat, p.lon]));
+  const stops = (rel.members || []).filter(m => m.type === "node" && /stop|platform/.test(m.role || "") && m.lat);
+  return lines.length ? { lines, stops } : null;
+}
+async function drawRoutes(services, dir, fitToRoute){
+  const req = ++routeReq;
+  layers.route.clearLayers(); document.getElementById("routeKey").hidden = true;
+  mapMsg("route", services.length > 1 ? "Loading routes…" : `Loading the ${services[0]} route…`);
+  try { await loadRouteData(services); }
+  catch { if (req === routeReq) mapMsg("route", "Couldn't load the bus routes"); return; }
+  if (req !== routeReq) return;   // selection changed while loading
+  const stop = STOPS[activeKey];
+  const drawn = services.map(s => ({ s, r: routeFor(s, dir, stop) })).filter(x => x.r);
+  // shared roads show stacked stripes: widest route first, narrower ones on top
+  const n = drawn.length, widths = n === 1 ? [7] : drawn.map((_, k) => 9 - k * 6 / (n - 1));
+  let bounds = null;
+  for (const x of drawn) L.polyline(x.r.lines, { pane:"routes", color:"#ffffff", weight: widths[0] + 4, opacity:.95, interactive:false }).addTo(layers.route);
+  drawn.forEach((x, k) => {
+    const pl = L.polyline(x.r.lines, { pane:"routes", color: routeColour(x.s), weight: widths[k], opacity:1, lineJoin:"round", interactive:false }).addTo(layers.route);
+    bounds = bounds ? bounds.extend(pl.getBounds()) : L.latLngBounds(pl.getBounds().getSouthWest(), pl.getBounds().getNorthEast());
+  });
+  for (const x of drawn) for (const s of x.r.stops)
+    L.circleMarker([s.lat, s.lon], { pane:"routes", radius:3, color:"#123a45", weight:2, fillColor:"#fff", fillOpacity:1, interactive:false }).addTo(layers.route);
+  const missing = services.filter(s => !drawn.some(x => x.s === s));
+  const rk = document.getElementById("routeKey");
+  rk.innerHTML = drawn.map(x => `<span><i style="background:${routeColour(x.s)}"></i>${x.s}</span>`).join("");
+  rk.hidden = !n;
+  mapMsg("route", null);
+  if (missing.length) mapMsg("route", `No map route found for the ${missing.join(", ")}`);
+  if (fitToRoute && bounds) map.fitBounds(bounds.pad(0.05));
 }
 
 /* ---------- weather ----------
    All from Open-Meteo, 3 h back to 12 h ahead:
    - local: a 6x6 grid over the map view (rain detail when zoomed in) + your spot (the chart)
    - wide:  a 2° grid over the North Atlantic and Europe (isobars, estimated fronts, rain when zoomed out)
-   - places: temperatures for Bristol areas (zoomed in) and UK cities (zoomed out) */
+   - places: temperature for Bristol (zoomed in) and UK cities (zoomed out) */
 let wx = null, wxIdx = 3, playTimer = null, syn = null, placeT = null, wxFirst = true;
 const show = { rain: true, temps: true, iso: false };
 const slider = document.getElementById("slider"), sliderLabel = document.getElementById("sliderLabel");
@@ -857,13 +928,11 @@ const WxCanvas = L.Layer.extend({
 const wxCanvas = new WxCanvas().addTo(map);
 
 /* --- temperature labels, BBC style --- */
-const PLACES_LOCAL = [["Henleaze",51.489,-2.605],["Westbury",51.494,-2.620],["Clifton",51.456,-2.620],["City centre",51.4545,-2.592],
-  ["Bedminster",51.440,-2.602],["Fishponds",51.480,-2.525],["Filton",51.507,-2.575],["Cribbs",51.524,-2.596],["Brislington",51.433,-2.550],["Avonmouth",51.500,-2.699]];
 const PLACES_UK = [["Stornoway",58.21,-6.39],["Aberdeen",57.15,-2.09],["Glasgow",55.86,-4.25],["Edinburgh",55.95,-3.19],["Belfast",54.60,-5.93],
   ["Newcastle",54.98,-1.61],["Liverpool",53.41,-2.98],["Hull",53.74,-0.33],["Birmingham",52.49,-1.89],["Norwich",52.63,1.30],
   ["Cardiff",51.48,-3.18],["Bristol",51.45,-2.59],["London",51.51,-0.13],["Plymouth",50.38,-4.14]];
 async function loadPlaces(){
-  const all = [...PLACES_LOCAL, ...PLACES_UK];
+  const all = PLACES_UK;
   try {
     const d = await om(all.map(p => p[1]), all.map(p => p[2]), "temperature_2m");
     placeT = { times: d[0].hourly.time, t: d.map(x => x.hourly.temperature_2m) };
@@ -874,9 +943,16 @@ let tempSig = "";
 function drawTemps(){
   if (!show.temps || !placeT) { layers.temp.clearLayers(); tempSig = ""; return; }
   const z = map.getZoom(), t = tIndex(placeT.times);
-  const set = z >= 10 ? PLACES_LOCAL.map((p, k) => [p, k]) : PLACES_UK.map((p, k) => [p, k + PLACES_LOCAL.length]);
-  const items = set.map(([p, k]) => [p, lerpAt(placeT.t[k], t)]).filter(x => x[1] != null);
-  const sig = (z >= 10 ? "L" : "U") + items.map(x => Math.round(x[1])).join(",");
+  let items;
+  if (z >= 10) {
+    // zoomed in: one "Bristol" label, kept inside the view and clear of the controls at the top
+    const k = PLACES_UK.findIndex(p => p[0] === "Bristol"), [name, lat, lng] = PLACES_UK[k], b = map.getBounds();
+    const s = b.getSouth(), n = b.getNorth(), w = b.getWest(), e = b.getEast();
+    const la = Math.min(n - (n - s)*.42, Math.max(s + (n - s)*.14, lat)), lo = Math.min(w + (e - w)*.62, Math.max(w + (e - w)*.04, lng));
+    items = [[[name, la, lo], lerpAt(placeT.t[k], t)]];
+  } else items = PLACES_UK.map((p, k) => [p, lerpAt(placeT.t[k], t)]);
+  items = items.filter(x => x[1] != null);
+  const sig = (z >= 10 ? "L" : "U") + items.map(x => `${Math.round(x[1])}@${x[0][1].toFixed(4)},${x[0][2].toFixed(4)}`).join(";");
   if (sig === tempSig) return;
   tempSig = sig; layers.temp.clearLayers();
   for (const [[name, lat, lng], v] of items)
@@ -959,8 +1035,8 @@ for (const [id, k] of [["chipRain", "rain"], ["chipTemp", "temps"], ["chipIso", 
   };
 }
 (() => { const b = document.getElementById("chipBus");
-  b.onclick = () => { const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", on); on ? layers.bus.addTo(map) : map.removeLayer(layers.bus); }; })();
-map.on("zoomend", drawTemps);
+  b.onclick = () => setBusesOn(!busesOn); })();
+map.on("zoomend moveend", drawTemps);
 setInterval(() => { if (show.iso || map.getZoom() < 9) loadSynoptic(true); }, 60*60000);
 setInterval(loadPlaces, 30*60000);
 
