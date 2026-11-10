@@ -657,7 +657,7 @@ async function drawRoutes(services, dir, fitToRoute){
    All from Open-Meteo, 3 h back to 12 h ahead:
    - local: a 6x6 grid over the map view (rain detail when zoomed in) + your spot (the chart)
    - wide:  a 2° grid over the North Atlantic and Europe (isobars, estimated fronts, rain when zoomed out)
-   - places: temperature for Bristol (zoomed in) and UK cities (zoomed out) */
+   - places: temperatures for Bristol areas (zoomed in) and UK cities (zoomed out) */
 let wx = null, wxIdx = 3, playTimer = null, syn = null, placeT = null, wxFirst = true;
 const show = { rain: true, temps: true, iso: false };
 const slider = document.getElementById("slider"), sliderLabel = document.getElementById("sliderLabel");
@@ -952,11 +952,19 @@ const WxCanvas = L.Layer.extend({
 const wxCanvas = new WxCanvas().addTo(map);
 
 /* --- temperature labels, BBC style --- */
+// Bristol areas: [name, lat, lng, zoom they appear from]. Broad areas first, so they win when labels would overlap.
+const PLACES_LOCAL = [
+  ["City centre",51.4545,-2.5920,10],["Henleaze",51.4890,-2.6050,10],["Clifton",51.4560,-2.6200,10],["Bedminster",51.4400,-2.6020,10],
+  ["Fishponds",51.4800,-2.5250,10],["Filton",51.5070,-2.5750,10],["Brislington",51.4330,-2.5500,10],["Avonmouth",51.5000,-2.6990,10],
+  ["Westbury-on-Trym",51.4950,-2.6210,11],["Redland",51.4680,-2.6000,11],["Horfield",51.4870,-2.5850,11],["Southmead",51.5000,-2.5940,11],
+  ["Stoke Bishop",51.4870,-2.6390,11],["Knowle",51.4300,-2.5800,11],["Easton",51.4630,-2.5600,11],["Bishopsworth",51.4170,-2.6150,11],
+  ["Cribbs Causeway",51.5240,-2.5960,11],["Hartcliffe",51.4100,-2.5900,12],["Kingswood",51.4560,-2.5050,11],["Hotwells",51.4490,-2.6170,12],
+  ["Cotham",51.4650,-2.5950,12],["Bishopston",51.4760,-2.5880,12],["Sea Mills",51.4860,-2.6520,12],["Lockleaze",51.4890,-2.5650,12]];
 const PLACES_UK = [["Stornoway",58.21,-6.39],["Aberdeen",57.15,-2.09],["Glasgow",55.86,-4.25],["Edinburgh",55.95,-3.19],["Belfast",54.60,-5.93],
   ["Newcastle",54.98,-1.61],["Liverpool",53.41,-2.98],["Hull",53.74,-0.33],["Birmingham",52.49,-1.89],["Norwich",52.63,1.30],
   ["Cardiff",51.48,-3.18],["Bristol",51.45,-2.59],["London",51.51,-0.13],["Plymouth",50.38,-4.14]];
 async function loadPlaces(){
-  const all = PLACES_UK;
+  const all = [...PLACES_LOCAL, ...PLACES_UK];
   try {
     const d = await om(all.map(p => p[1]), all.map(p => p[2]), "temperature_2m");
     placeT = { times: d[0].hourly.time, t: d.map(x => x.hourly.temperature_2m) };
@@ -966,17 +974,21 @@ async function loadPlaces(){
 let tempSig = "";
 function drawTemps(){
   if (!show.temps || !placeT) { layers.temp.clearLayers(); tempSig = ""; return; }
-  const z = map.getZoom(), t = tIndex(placeT.times);
-  let items;
-  if (z >= 10) {
-    // zoomed in: one "Bristol" label, kept inside the view and clear of the controls at the top
-    const k = PLACES_UK.findIndex(p => p[0] === "Bristol"), [name, lat, lng] = PLACES_UK[k], b = map.getBounds();
-    const s = b.getSouth(), n = b.getNorth(), w = b.getWest(), e = b.getEast();
-    const la = Math.min(n - (n - s)*.42, Math.max(s + (n - s)*.14, lat)), lo = Math.min(w + (e - w)*.62, Math.max(w + (e - w)*.04, lng));
-    items = [[[name, la, lo], lerpAt(placeT.t[k], t)]];
-  } else items = PLACES_UK.map((p, k) => [p, lerpAt(placeT.t[k], t)]);
-  items = items.filter(x => x[1] != null);
-  const sig = (z >= 10 ? "L" : "U") + items.map(x => `${Math.round(x[1])}@${x[0][1].toFixed(4)},${x[0][2].toFixed(4)}`).join(";");
+  const z = map.getZoom(), t = tIndex(placeT.times), size = map.getSize();
+  const cands = z >= 10
+    ? PLACES_LOCAL.map((p, k) => [p, k]).filter(([p]) => z >= p[3])          // Bristol areas
+    : PLACES_UK.map((p, k) => [p, k + PLACES_LOCAL.length]);              // UK cities
+  // keep labels on screen, clear of the controls at the top, and not on top of each other
+  const top = (document.querySelector(".maptop")?.offsetHeight || 0) + 14, boxes = [], items = [];
+  for (const [p, k] of cands) {
+    const v = lerpAt(placeT.t[k], t); if (v == null) continue;
+    const pt = map.latLngToContainerPoint([p[1], p[2]]);
+    const w = 44 + p[0].length * 6.6, box = [pt.x - 6, pt.y - 13, pt.x + w, pt.y + 13];
+    if (z >= 10 && (box[0] < 0 || box[2] > size.x || box[1] < top || box[3] > size.y - 20)) continue;
+    if (boxes.some(b => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
+    boxes.push(box); items.push([p, v]);
+  }
+  const sig = z + ":" + items.map(([p, v]) => `${p[0]}${Math.round(v)}`).join(";");
   if (sig === tempSig) return;
   tempSig = sig; layers.temp.clearLayers();
   for (const [[name, lat, lng], v] of items)
