@@ -1005,14 +1005,14 @@ function moveChartCursor(){
 }
 function drawWxChart(){
   const svg = document.getElementById("wxChart"), h = wx.here, n = h.t.length, now = wx.nowIdx;
-  const W = 360, H = 160, L0 = 28, R0 = 34, T0 = 16, B0 = 26, cw = (W - L0 - R0)/n, base = H - B0, ph = H - T0 - B0;
+  const W = 360, H = 166, L0 = 28, R0 = 34, T0 = 16, B0 = 24, cw = (W - L0 - R0)/n, base = H - B0, ph = H - T0 - B0;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const pMax = Math.max(1, Math.ceil(Math.max(...h.p.map(v => v || 0)))), tMin = Math.floor(Math.min(...h.t)) - 1, tMax = Math.ceil(Math.max(...h.t)) + 1;
   const y = v => T0 + ph * (1 - (v - tMin)/(tMax - tMin));
   let s = `<line x1="${L0}" x2="${W-R0}" y1="${base}" y2="${base}" stroke="var(--line)"/>`;
   s += `<rect x="${L0 + cw*now}" y="${T0}" width="${cw}" height="${ph}" fill="var(--accent)" opacity=".18"/>`;
   s += `<line x1="${L0 + cw*(now + 1)}" x2="${L0 + cw*(now + 1)}" y1="${T0 - 6}" y2="${base}" stroke="var(--muted)" stroke-dasharray="3 3"/>`;
-  s += `<text x="${L0 + cw*(now + 1) + 3}" y="${T0 - 5}" style="font-size:9px">forecast →</text>`;
+  s += `<text x="${L0 + cw*(now + 1) + 14}" y="${T0 - 5}" style="font-size:9px">forecast →</text>`;
   h.p.forEach((p, k) => {
     p = p || 0; const bh = ph * Math.min(p, pMax)/pMax, x = L0 + cw*k + 2, bw = cw - 4;
     if (p >= .05) s += k <= now
@@ -1025,7 +1025,16 @@ function drawWxChart(){
   s += `<circle cx="${L0 + cw*(now+.5)}" cy="${y(h.t[now])}" r="4" fill="var(--late)"/>`;
   s += `<text x="${L0-4}" y="${y(tMax)+4}" text-anchor="end">${tMax}°</text><text x="${L0-4}" y="${y(tMin)}" text-anchor="end">${tMin}°</text>`;
   s += `<text x="${W-R0+4}" y="${T0+4}" style="fill:var(--rain)">${pMax} mm</text><text x="${W-R0+4}" y="${base}" style="fill:var(--rain)">0</text>`;
-  [0, now, n-1].forEach(k => s += `<text x="${L0 + cw*(k+.5)}" y="${H-8}" text-anchor="middle">${k === now ? "Now" : wx.times[k].slice(11, 16)}</text>`);
+  // time axis: a tick every hour, a time every 2 hours (day name at midnight), "Now" above the current hour
+  wx.times.forEach((tm, k) => {
+    const x = L0 + cw*(k + .5), hr = +tm.slice(11, 13);
+    s += `<line x1="${x}" x2="${x}" y1="${base}" y2="${base + (hr % 2 ? 3 : 5)}" stroke="var(--muted)"/>`;
+    if (hr % 2 === 0) {
+      const lbl = hr === 0 ? new Date(tm + ":00Z").toLocaleDateString("en-GB", { weekday: "short", timeZone: "UTC" }) : tm.slice(11, 16);
+      s += `<text x="${x}" y="${base + 15}" text-anchor="middle" style="font-size:9.5px${k === now ? ";font-weight:700;fill:var(--ink)" : ""}">${lbl}</text>`;
+    }
+  });
+  s += `<text x="${L0 + cw*(now + .5)}" y="${T0 - 5}" text-anchor="middle" style="font-size:9px;font-weight:700;fill:var(--ink)">Now</text>`;
   s += `<line id="wxCursor" x1="0" x2="0" y1="${T0 - 2}" y2="${base}" stroke="var(--ink)" stroke-width="1.5" opacity=".6"/>`;
   svg.innerHTML = s; wxChartGeo = { L0, cw }; moveChartCursor();
   const due = h.p.slice(now + 1).reduce((a, b) => a + (b || 0), 0), peak = Math.max(0, ...h.pp.slice(now + 1).map(v => v || 0));
