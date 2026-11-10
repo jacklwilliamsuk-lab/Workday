@@ -41,10 +41,11 @@ The app asks the government feed directly. If your phone's browser blocks that, 
 | You're nearest to | Stop used | Shows |
 |---|---|---|
 | Dorset Road | Henleaze Dorset Road, south-bound (0100BRP92066) | Next 3 arrivals (2, 2a, Y6) + those buses on the map heading to it |
-| The Centre | Stop C7 (0100BRP90371) | Next departures of 1, 2, 2a, Y6 |
-| College Green | Stop P1 (0100BRP90327) | Next departures of 1, 2, 2a, Y6 |
+| Rupert Street | Stop B6 (0100BRA16911) | Next departures of 1, 2, 2a, Y6 (north-bound) |
+| The Centre | Stop C7 (0100BRP90371) | Next departures of 1, 2, 2a, Y6 (north-bound) |
+| College Green | Stop P1 (0100BRP90327) | Next departures of 1, 2, 2a, Y6 (north-bound) |
 
-Note: the Y6 starts from Rupert Street / the bus station, so it may not appear at C7 or P1.
+Heading north, all four routes call at Rupert Street (B6), then The Centre (C7), then College Green (P1). The Y6 starts at Rupert Street.
 
 ## Work log
 

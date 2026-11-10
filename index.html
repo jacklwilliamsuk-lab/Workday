@@ -235,6 +235,7 @@ dialog input,dialog select{width:100%;padding:8px 10px;border:1px solid var(--li
     <select id="locOverride">
       <option value="gps">Use my phone's location</option>
       <option value="dorset">Pretend I'm at Dorset Road</option>
+      <option value="rupert">Pretend I'm at Rupert Street</option>
       <option value="centre">Pretend I'm at The Centre</option>
       <option value="green">Pretend I'm at College Green</option>
     </select>
@@ -263,15 +264,19 @@ const passedSouth = v => v.lat < CUTOFF.south.lat - 0.0003;
 // past Queen's Road heading up Whiteladies Road, or well out of town (e.g. a Y6 on the M32)
 const passedNorth = v => (v.lat > CUTOFF.north.lat + 0.0003 && v.lng < -2.6025) || v.lat > 51.4625;
 const STOPS = {
-  dorset: { atco:"0100BRP92066", name:"Dorset Road South · towards city centre", lat:51.48852, lng:-2.60848,
+  dorset: { atco:"0100BRP92066", name:"Dorset Road South · towards city centre", pin:"Dorset Rd S", short:"Dorset Rd South", lat:51.48852, lng:-2.60848,
             services:["2","2a","Y6"], show:3, mode:"arrivals",
             // south-bound only: drop anything heading back north
             notTo:/cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead/i },
-  centre: { atco:"0100BRP90371", name:"The Centre (stop C7)", lat:51.45460, lng:-2.59700,
+  rupert: { atco:"0100BRA16911", name:"Rupert Street (stop B6)", pin:"Rupert St B6", short:"Rupert Street", lat:51.45665, lng:-2.59500,
             services:["1","2","2a","Y6"], show:6, mode:"departures",
             // north-bound only: buses heading out towards Henleaze, Cribbs, Brentry, Sodbury
             onlyTo:/cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead|henleaze|westbury/i },
-  green:  { atco:"0100BRP90327", name:"College Green (stop P1)", lat:51.45185, lng:-2.60060,
+  centre: { atco:"0100BRP90371", name:"The Centre (stop C7)", pin:"Centre C7", short:"The Centre", lat:51.45460, lng:-2.59700,
+            services:["1","2","2a","Y6"], show:6, mode:"departures",
+            // north-bound only: buses heading out towards Henleaze, Cribbs, Brentry, Sodbury
+            onlyTo:/cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead|henleaze|westbury/i },
+  green:  { atco:"0100BRP90327", name:"College Green (stop P1)", pin:"College Grn P1", short:"College Green", lat:51.45185, lng:-2.60060,
             services:["1","2","2a","Y6"], show:6, mode:"departures",
             // north-bound only: buses heading out towards Henleaze, Cribbs, Brentry, Sodbury
             onlyTo:/cribbs|brentry|charlton|chipping|sodbury|wickwar|yate|southmead|henleaze|westbury/i },
@@ -317,7 +322,7 @@ function mapMsg(key, text){ if (text) msgs[key] = text; else delete msgs[key];
   el.hidden = !all.length; el.textContent = all.join(" · "); }
 
 for (const [k, s] of Object.entries(STOPS)) {
-  s.marker = L.marker([s.lat, s.lng], { icon: L.divIcon({ className:"", html:`<div class="stop-pin">${k==="dorset"?"Dorset Rd S":k==="centre"?"Centre C7":"College Grn P1"}</div>`, iconAnchor:[30,12] }),
+  s.marker = L.marker([s.lat, s.lng], { icon: L.divIcon({ className:"", html:`<div class="stop-pin">${s.pin}</div>`, iconAnchor:[30,12] }),
     title: `Show all routes and buses heading to ${s.name}`, zIndexOffset: 500 })
     .on("click", () => selectStop(k))
     .addTo(layers.stops);
@@ -336,10 +341,10 @@ function setMe(pos, label){
   me = pos;
   if (!meMarker) meMarker = L.marker([pos.lat,pos.lng], { icon:L.divIcon({className:"",html:'<div class="me-dot"></div>',iconSize:[16,16],iconAnchor:[8,8]}), zIndexOffset:1000 }).addTo(map);
   else meMarker.setLatLng([pos.lat,pos.lng]);
-  // pick stop: Dorset Road vs the nearer of Centre / College Green
-  const dD = dist(pos, STOPS.dorset), dC = dist(pos, STOPS.centre), dG = dist(pos, STOPS.green);
-  const key = pinnedStop || (dD <= Math.min(dC, dG) ? "dorset" : (dC <= dG ? "centre" : "green"));
-  document.getElementById("where").textContent = `${label} · ${fmtDist({dorset:dD,centre:dC,green:dG}[key])} from ${key==="dorset"?"Dorset Rd South":key==="centre"?"The Centre":"College Green"}`;
+  // pick the nearest stop: Dorset Road South, Rupert Street, The Centre or College Green
+  const d = Object.fromEntries(Object.keys(STOPS).map(k => [k, dist(pos, STOPS[k])]));
+  const key = pinnedStop || Object.keys(d).reduce((a, b) => d[a] <= d[b] ? a : b);
+  document.getElementById("where").textContent = `${label} · ${fmtDist(d[key])} from ${STOPS[key].short}`;
   if (key !== activeKey) { activeKey = key; loadBuses(); }
   if (first) map.fitBounds(L.latLngBounds([[pos.lat,pos.lng],[STOPS[key].lat,STOPS[key].lng]]).pad(0.6), { maxZoom:16 });
 }
@@ -485,7 +490,7 @@ async function refreshVehicles(){
   if (!bodsKey && !relay) { layers.bus.clearLayers(); mapMsg("bus", "Live bus positions need the bus relay: Settings"); return; }
   const stop = STOPS[activeKey];
   // Dorset Road South: south-bound buses approach from the north.
-  // Centre / College Green: north-bound buses come in from across the city.
+  // Rupert Street / Centre / College Green: north-bound buses come in from across the city.
   const box = activeKey === "dorset"
     ? { xmin: stop.lng-0.06, xmax: stop.lng+0.04, ymin: CUTOFF.south.lat-0.002, ymax: stop.lat+0.06 }
     : { xmin: stop.lng-0.09, xmax: stop.lng+0.09, ymin: stop.lat-0.07, ymax: stop.lat+0.04 };
@@ -526,7 +531,7 @@ function findSelected(){
   const stop = STOPS[activeKey];
   return same.reduce((a, v) => (!a || dist(v, stop) < dist(a, stop)) ? v : a, null);
 }
-// Up triangle: heading north to The Centre / College Green. Down triangle: heading south to Dorset Road.
+// Up triangle: heading north to Rupert Street / The Centre / College Green. Down triangle: heading south to Dorset Road.
 function busIcon(v, isSel){
   const up = activeKey !== "dorset", s = isSel ? 1.35 : 1, w = Math.round(34*s), h = Math.round(30*s);
   const pts = up ? "17,2 32,28 2,28" : "2,2 32,2 17,28";
